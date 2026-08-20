@@ -1,5 +1,6 @@
 import os
 import argparse
+import concurrent.futures
 import subprocess
 import tempfile
 
@@ -9,6 +10,7 @@ from core.Face_Swaper import Swapper_Faces
 
 
 VIDEO_EXTENSIONS = (".mp4", ".avi", ".mkv", ".mov")
+PROGRESS_BAR_WIDTH = 30
 
 
 def build_parser():
@@ -119,6 +121,18 @@ def _process_image(swapper, source_img, target_path, output_path, args):
         raise RuntimeError(f"No se pudo escribir el archivo: {output_path}")
 
 
+def _show_progress(current, total, label="Procesando"):
+    if total > 0:
+        percentage = min(current / total, 1.0)
+        completed_width = int(PROGRESS_BAR_WIDTH * percentage)
+        bar = "#" * completed_width + "-" * (PROGRESS_BAR_WIDTH - completed_width)
+        message = f"\r{label}: [{bar}] {percentage * 100:6.2f}% ({current}/{total})"
+    else:
+        message = f"\r{label}: {current} frames"
+
+    print(message, end="", flush=True)
+
+
 def _process_video(swapper, source_img, target_path, output_path, args):
     capture = cv2.VideoCapture(target_path)
     if not capture.isOpened():
@@ -127,6 +141,7 @@ def _process_video(swapper, source_img, target_path, output_path, args):
     fps = capture.get(cv2.CAP_PROP_FPS) or 30
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     temp_video = None
 
     try:
@@ -142,24 +157,54 @@ def _process_video(swapper, source_img, target_path, output_path, args):
             raise RuntimeError("No se pudo crear el video temporal")
 
         frame_number = 0
-        while True:
-            success, frame = capture.read()
-            if not success:
-                break
-            writer.write(_swap_frame(swapper, source_img, frame, args))
-            frame_number += 1
-            if args.verbose:
-                print(f"Procesando frame {frame_number}", flush=True)
+        frames_written = 0
+        pending_frames = {}
+        reading_finished = False
+        max_pending_frames = max(args.threads * 2, args.threads)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
+            while not reading_finished or pending_frames:
+                while not reading_finished and len(pending_frames) < max_pending_frames:
+                    success, frame = capture.read()
+                    if not success:
+                        reading_finished = True
+                        break
+
+                    pending_frames[frame_number] = executor.submit(
+                        _swap_frame,
+                        swapper,
+                        source_img,
+                        frame,
+                        args,
+                    )
+                    frame_number += 1
+
+                if frames_written not in pending_frames:
+                    continue
+
+                result_frame = pending_frames.pop(frames_written).result()
+                writer.write(result_frame)
+                frames_written += 1
+
+                if args.verbose:
+                    print(f"\nProcesando frame {frames_written}", flush=True)
+                else:
+                    _show_progress(frames_written, total_frames)
 
         writer.release()
-        if frame_number == 0:
+        if frames_written == 0:
             raise ValueError("El video no contiene frames legibles")
+
+        if not args.verbose:
+            _show_progress(frames_written, total_frames)
+            print()
 
         if args.no_audio:
             os.replace(temp_video, output_path)
             temp_video = None
             return
 
+        print("Copiando audio original...", flush=True)
         ffmpeg_command = [
             "ffmpeg", "-y",
             "-i", temp_video,
