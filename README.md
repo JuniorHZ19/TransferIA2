@@ -73,6 +73,7 @@ Opciones disponibles:
 --target PATH              imagen o video destino
 --output PATH              archivo de salida
 --models-dir PATH          carpeta de modelos (por defecto: models)
+--device DEVICE            auto, cuda o cpu (por defecto: auto)
 --source-index INDICES     indices de origen, por ejemplo 0,1
 --target-index INDICES     indices de destino, por ejemplo 0,1
 --occlusion                activa el modelo de oclusion
@@ -88,6 +89,14 @@ Puedes consultar la ayuda completa con:
 ```bash
 python cli.py process --help
 ```
+
+Para exigir el uso de la GPU NVIDIA:
+
+```bash
+python cli.py process --device cuda --source "src/rostro.jpg" --target "src/video.mp4" --output "output/resultado.mp4" --threads 2
+```
+
+Si CUDA no esta disponible, `--device cuda` detiene el proceso y muestra un error. `--device auto` intenta usar CUDA y permite CPU como respaldo.
 
 ## 🎯 Reglas y Consideraciones
 
