@@ -31,7 +31,14 @@ class Swapper_Faces:
        
 
         if self.__class__._SWAPPER_MODEL is None:
-           self.__class__._SWAPPER_MODEL=insightface.model_zoo.get_model(path, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+           self.__class__._SWAPPER_MODEL=insightface.model_zoo.get_model(path, providers = [
+                                                                                                ("CUDAExecutionProvider", {
+                                                                                                    "device_id": 0,
+                                                                                                    "cudnn_conv_algo_search": "DEFAULT",
+                                                                                                    "cudnn_conv_use_max_workspace": "0"
+                                                                                                }),
+                                                                                                "CPUExecutionProvider"
+                                                                                            ])
       
     def get_Swapper_Model(self):
         return  self.__class__._SWAPPER_MODEL
