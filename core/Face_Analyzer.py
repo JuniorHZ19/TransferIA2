@@ -35,7 +35,7 @@ class Analyzer_Faces:
         if Analyzer_Faces._ANALIZADOR_CARA is None:
             Analyzer_Faces._ANALIZADOR_CARA = insightface.app.FaceAnalysis(
                 name='buffalo_l',
-                providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+                providers=['CPUExecutionProvider'] #providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
             )
             Analyzer_Faces._ANALIZADOR_CARA.prepare(ctx_id=0,det_size=(480, 480))  # preparar el modelo
 
