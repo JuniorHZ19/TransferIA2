@@ -17,7 +17,7 @@ class DFL_XSeg_Model:
                 if self.__class__._XSEG_SESSION is None:
                     self.__class__._XSEG_SESSION = ort.InferenceSession(
                         model_path,
-                        providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+                        providers=['CPUExecutionProvider']#providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
                 )
          # Almacenar nombres de entrada y salida una sola vez
         session = self.__class__._XSEG_SESSION
