@@ -35,12 +35,7 @@ class Analyzer_Faces:
         if Analyzer_Faces._ANALIZADOR_CARA is None:
             Analyzer_Faces._ANALIZADOR_CARA = insightface.app.FaceAnalysis(
                 name='buffalo_l',
-                providers = [
-                                ("CUDAExecutionProvider", {
-                                    "device_id": 0,
-                                    "cudnn_conv_algo_search": "DEFAULT",
-                                    "cudnn_conv_use_max_workspace": "0"
-                                }),
+                providers = ["CUDAExecutionProvider",
                                 "CPUExecutionProvider"
                             ]#providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
             )
