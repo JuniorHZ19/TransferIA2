@@ -17,12 +17,7 @@ class DFL_XSeg_Model:
                 if self.__class__._XSEG_SESSION is None:
                     self.__class__._XSEG_SESSION = ort.InferenceSession(
                         model_path,
-                        providers = [
-                                        ("CUDAExecutionProvider", {
-                                            "device_id": 0,
-                                            "cudnn_conv_algo_search": "DEFAULT",
-                                            "cudnn_conv_use_max_workspace": "0"
-                                        }),
+                        providers = ["CUDAExecutionProvider",
                                         "CPUExecutionProvider"
                                     ]#providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
                                                     )
