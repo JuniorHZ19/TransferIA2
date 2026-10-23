@@ -2,6 +2,20 @@ import onnxruntime as ort
 import cv2
 import numpy as np
 import threading
+
+# Interruptor: True = recorte alineado con los 5 puntos clave (soporta caras inclinadas
+# y boca abajo). False = metodo anterior (recorte rectangular del bbox).
+USAR_ALINEACION = True
+
+# Posicion estandar de ojos, nariz y comisuras de la boca (normalizada 0-1)
+FFHQ_TEMPLATE = np.array([
+    [0.37691676, 0.46864664],  # ojo izq
+    [0.62285697, 0.46912813],  # ojo der
+    [0.50123859, 0.61331904],  # nariz
+    [0.39308822, 0.72541100],  # boca izq
+    [0.61150205, 0.72490465],  # boca der
+], dtype=np.float32)
+
 class DFL_XSeg_Model:
     _XSEG_SESSION = None
     _LOCK = threading.Lock()
@@ -119,10 +133,51 @@ class DFL_XSeg_Model:
             return aligned_img, M, M_inv
     '''
 
+    def align_face(self, frame, face, size=256, margen=1.0):
+        """
+        Alinea la cara usando los 5 puntos clave (face.kps) para que el modelo xseg siempre
+        la reciba derecha, sin importar la inclinacion. "margen" < 1 aleja la cara (mas contexto).
+        Devuelve el recorte alineado y la matriz afin usada.
+        """
+        dst = ((FFHQ_TEMPLATE - 0.5) * margen + 0.5) * size
+        M, _ = cv2.estimateAffinePartial2D(face.kps.astype(np.float32), dst,
+                                           method=cv2.RANSAC, ransacReprojThreshold=100)
+        crop = cv2.warpAffine(frame, M, (size, size),
+                              borderMode=cv2.BORDER_REPLICATE, flags=cv2.INTER_AREA)
+        return crop, M
+
+    def get_complete_mask_alineada(self, img, face):
+        """
+        Genera la mascara sobre la cara alineada y la devuelve a su posicion/rotacion original
+        con la matriz inversa.
+        """
+        try:
+            h, w = img.shape[:2]
+            crop, M = self.align_face(img, face)
+
+            outputs = self.run_inference(self.preprocess(crop))
+            mask = np.array(outputs).reshape((256, 256)).astype(np.float32)
+            mask = cv2.GaussianBlur(mask, (7, 7), 3)
+            mask = np.clip(np.power(np.clip(mask, 0, 1), 1.5), 0, 1)
+
+            M_inv = cv2.invertAffineTransform(M)
+            full = cv2.warpAffine(mask, M_inv, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
+            full = np.uint8(np.clip(full, 0, 1) * 255)
+            full = cv2.morphologyEx(full, cv2.MORPH_CLOSE, (3, 3), iterations=2)
+
+            return cv2.GaussianBlur(full, (5, 5), 2)
+
+        except Exception as e:
+            print(f"Error generating mask: {str(e)}")
+            return None
+
     def get_complete_mask(self, img, face):
         """
         Genera una máscara más suave y precisa, con manejo robusto de dimensiones
         """
+        if USAR_ALINEACION and getattr(face, "kps", None) is not None:
+            return self.get_complete_mask_alineada(img, face)
+
         try:
             img_blank = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
 

@@ -3,6 +3,14 @@ import cv2
 import numpy as np
 import insightface
 
+# Angulos en los que se busca caras si no se encuentra ninguna en el frame original.
+# Poner (0,) para volver al comportamiento anterior (solo deteccion normal).
+ANGULOS_DETECCION = (0, 90, 180, 270)
+
+# Si una cara esta inclinada (a la izquierda o derecha) mas de estos grados, se endereza la imagen
+# y se vuelve a detectar para obtener puntos clave mas precisos. Poner None para desactivarlo.
+UMBRAL_REFINAR_INCLINACION = 30
+
 class Analyzer_Faces:
 
     '''
@@ -49,13 +57,110 @@ class Analyzer_Faces:
     def obtener_caras(self, frame , ordenamiento="iz-de"):
 
         '''Retornaremos el conjunto de caras que detecta nuestro analizador  usaremos get(img) de Anylzer_Faces cual devuelve un arrray de Faces'''
-        caras=Analyzer_Faces._ANALIZADOR_CARA.get(frame)
+        caras=self.detectar_con_rotacion(frame)
 
         caras_ordenadas=self.ordenamiento_caras(caras,ordenamiento)
 
         return caras_ordenadas
 
 
+
+    def _rotar(self, frame, angulo):
+        '''Rota el frame sin recortar las esquinas y devuelve la matriz inversa para volver al original'''
+        h, w = frame.shape[:2]
+        M = cv2.getRotationMatrix2D((w / 2, h / 2), angulo, 1.0)
+        cos, sin = abs(M[0, 0]), abs(M[0, 1])
+        nw, nh = int(h * sin + w * cos), int(h * cos + w * sin)
+        M[0, 2] += nw / 2 - w / 2
+        M[1, 2] += nh / 2 - h / 2
+        return cv2.warpAffine(frame, M, (nw, nh)), cv2.invertAffineTransform(M)
+
+    def _mapear(self, pts, M_inv):
+        '''Aplica la matriz afin a un arreglo de puntos (N,2)'''
+        return pts @ M_inv[:, :2].T + M_inv[:, 2]
+
+    def detectar_con_rotacion(self, frame, angulos=None):
+        '''Detecta caras probando cada angulo; las coordenadas (bbox, kps, landmarks) se devuelven en el
+           sistema del frame original. Permite caras inclinadas a la izquierda, derecha o boca abajo.
+           Una deteccion solo se da por buena si la cara queda casi derecha (+-45) en ese giro; si no,
+           se sigue probando y por cada cara se elige la deteccion con mayor det_score.'''
+        if angulos is None:
+            angulos = ANGULOS_DETECCION
+
+        candidatas = []
+        for ang in angulos:
+            if ang == 0:
+                rot, M_inv = frame, None
+            else:
+                rot, M_inv = self._rotar(frame, ang)
+            caras = Analyzer_Faces._ANALIZADOR_CARA.get(rot)
+            confiables = all(abs(self.inclinacion(c)) <= 45 for c in caras)
+            if M_inv is not None:
+                for c in caras:
+                    self._mapear_cara(c, M_inv)
+            candidatas.extend(caras)
+            if len(caras) > 0 and confiables:
+                break
+
+        caras = self._unir_duplicadas(candidatas)
+
+        if UMBRAL_REFINAR_INCLINACION is not None:
+            caras = [self._refinar_cara_inclinada(frame, c) for c in caras]
+
+        return caras
+
+    def _unir_duplicadas(self, caras):
+        '''Si la misma cara se detecto en varios giros, se queda con la de mayor det_score'''
+        elegidas = []
+        for c in sorted(caras, key=lambda c: c.det_score, reverse=True):
+            cx, cy = (c.bbox[:2] + c.bbox[2:]) / 2
+            duplicada = False
+            for e in elegidas:
+                ex, ey = (e.bbox[:2] + e.bbox[2:]) / 2
+                tam = max(e.bbox[2] - e.bbox[0], e.bbox[3] - e.bbox[1])
+                if np.hypot(cx - ex, cy - ey) < tam * 0.5:
+                    duplicada = True
+                    break
+            if not duplicada:
+                elegidas.append(c)
+        return elegidas
+
+    def _mapear_cara(self, c, M_inv):
+        '''Pasa bbox, kps y landmarks de una cara detectada en un frame rotado al frame original'''
+        c.kps = self._mapear(c.kps, M_inv).astype(np.float32)
+        x1, y1, x2, y2 = c.bbox
+        esquinas = self._mapear(np.array([[x1, y1], [x2, y1], [x1, y2], [x2, y2]], dtype=np.float32), M_inv)
+        c.bbox = np.array([*esquinas.min(0), *esquinas.max(0)], dtype=np.float32)
+        if c.get("landmark_2d_106") is not None:
+            c.landmark_2d_106 = self._mapear(c.landmark_2d_106, M_inv).astype(np.float32)
+        return c
+
+    def inclinacion(self, cara):
+        '''Angulo (grados) de la linea de los ojos: positivo = inclinada a un lado, negativo = al otro'''
+        vx, vy = cara.kps[1] - cara.kps[0]
+        return float(np.degrees(np.arctan2(vy, vx)))
+
+    def _refinar_cara_inclinada(self, frame, cara):
+        '''Si la cara esta muy inclinada, endereza la imagen segun la linea de los ojos, vuelve a detectar
+           y se queda con la cara mas cercana a la original. Los puntos clave salen mas precisos.'''
+        angulo = self.inclinacion(cara)
+        if abs(angulo) <= UMBRAL_REFINAR_INCLINACION:
+            return cara
+
+        rot, M_inv = self._rotar(frame, angulo)
+        candidatas = Analyzer_Faces._ANALIZADOR_CARA.get(rot)
+        if not candidatas:
+            return cara
+
+        centro = cara.kps.mean(0)
+        candidatas = [self._mapear_cara(c, M_inv) for c in candidatas]
+        mejor = min(candidatas, key=lambda c: np.linalg.norm(c.kps.mean(0) - centro))
+
+        # Aceptar solo si es la misma cara (centro cercano en relacion a la distancia entre ojos)
+        dist_ojos = np.linalg.norm(cara.kps[1] - cara.kps[0])
+        if np.linalg.norm(mejor.kps.mean(0) - centro) > dist_ojos or mejor.det_score < cara.det_score * 0.9:
+            return cara
+        return mejor
 
     def obtener_cara(self, frame, posicion):
 

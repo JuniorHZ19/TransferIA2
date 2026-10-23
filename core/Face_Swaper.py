@@ -54,7 +54,7 @@ class Swapper_Faces:
         fake_frame=frame_dst
 
         
-        for i in range(min(len(caras_src), len(caras_dst),len(index_src),len(indices_dst))):
+        for i in range(min(len(caras_src), len(caras_dst),len(indices_src),len(indices_dst))):
         
 
          frame_dst=fake_frame
