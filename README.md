@@ -1,6 +1,6 @@
 # Transfer-IA
 
-Transfer-IA es una aplicación de cambio facial que utiliza inteligencia artificial para transferencia facial entre imágenes y videos de manera realista.
+Transfer-IA es una aplicación de cambio facial que utiliza inteligencia artificial para transferencia facial de manera realista.
 
 ## 🚀 Características
 
