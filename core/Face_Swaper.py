@@ -100,15 +100,16 @@ class Swapper_Faces:
         mascara_total = np.zeros(frame_dst.shape[:2], dtype=np.float32) if devolver_mascara else None
 
 
-        for i in range(min(len(caras_src), len(caras_dst),len(indices_src),len(indices_dst))):
-        
+        # Cada par (fuente, destino) por separado: una misma fuente puede ir a varias caras (0,0 -> 0,1). Antes el
+        # total se limitaba a la cantidad de fuentes y con una sola fuente solo cambiaba la primera cara.
+        # Si en este frame no esta la cara pedida (o la fuente no existe), ese par se salta
+        for indice_src, indice_dst in zip(indices_src, indices_dst):
+
+         if not (0 <= indice_src < len(caras_src) and 0 <= indice_dst < len(caras_dst)):
+            continue
 
          frame_dst=fake_frame
 
-         indice_src=indices_src[i]
-
-         indice_dst=indices_dst[i]
-         
          fake_frame, alfa = self.cambiar_una(frame_dst, caras_src[indice_src], caras_dst[indice_dst], oclution, mode,
                                              ojos, mascara, boca, color, nariz, maquillaje, mejorar, devolver_mascara,
                                              mejorar_minimo, frente, oclusion_modo)

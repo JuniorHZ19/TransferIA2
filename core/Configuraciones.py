@@ -33,6 +33,8 @@ DEFECTOS = {
     "hilos": 2,
     "contenedor": "mkv",
     "codec": "libx264",
+    "zip": False,
+    "zip_conservar": False,
     "carpeta_salida": "output",
     "nombre_archivo": "resultado",
 }
@@ -88,6 +90,7 @@ def _texto(valor):
 VALIDADORES = {
     "indices_fuente": _indices,
     "indices_destino": _indices,
+    "zip": _si_no, "zip_conservar": _si_no,
     "ojos": _si_no, "boca": _si_no, "nariz": _si_no, "frente": _si_no, "oclusion": _si_no, "mejorar": _si_no,
     "maquillaje": _fraccion(0.0, 1.0),
     "fuerza_mejora": _fraccion(0.1, 1.0),

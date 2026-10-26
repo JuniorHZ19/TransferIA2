@@ -13,6 +13,7 @@ from core.Identidades import Registro_Identidades
 from core.Modelo_Cara import Modelo_Cara, CARPETA_MODELOS, FPS_VIDEO, MAX_FRAMES_VIDEO
 from core.Proceso_Carpeta import imagenes_carpeta, carpeta_salida, procesar_carpeta
 from core import Configuraciones
+from core.Empaquetar import empaquetar, ruta_zip, disponible as zip_disponible
 from core.Personas import (Personas, validar_fps, validar_maximo, FPS as PERSONAS_FPS, MAX_FRAMES as PERSONAS_MAX,
                            MAX_FRAMES_RANGO as PERSONAS_MAX_RANGO)
 import tkinterdnd2 as tkdnd
@@ -1088,6 +1089,22 @@ class FaceSwapApp:
         ttk.Label(file_frame, text="Nombre del Archivo:").pack(side=tk.LEFT)
         self.output_filename_var = tk.StringVar(value="resultado")
         ttk.Entry(file_frame, textvariable=self.output_filename_var, width=50).pack(side=tk.LEFT, padx=5)
+
+        # ZIP con contraseña (AES-256): el resultado no queda suelto en la carpeta. La contraseña no se guarda
+        zip_frame = ttk.Frame(output_frame)
+        zip_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
+        self.zip_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(zip_frame, text="Guardar en ZIP con contraseña", variable=self.zip_var,
+                        command=self._estado_zip).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(zip_frame, text="Contraseña:").pack(side=tk.LEFT)
+        self.zip_contrasena_var = tk.StringVar()
+        self.zip_contrasena_entry = ttk.Entry(zip_frame, textvariable=self.zip_contrasena_var, show="•", width=18)
+        self.zip_contrasena_entry.pack(side=tk.LEFT, padx=5)
+        self.zip_conservar_var = tk.BooleanVar(value=False)
+        self.zip_conservar_check = ttk.Checkbutton(zip_frame, text="Conservar también el archivo suelto",
+                                                   variable=self.zip_conservar_var)
+        self.zip_conservar_check.pack(side=tk.LEFT, padx=(10, 0))
+        self._estado_zip()
         
         # Configuración de procesamiento
         process_frame = ttk.LabelFrame(derecha, text="Configuración de Procesamiento")
@@ -1231,6 +1248,8 @@ class FaceSwapApp:
             "hilos": hilos,
             "contenedor": self.contenedor_var.get(),
             "codec": self.codec_var.get(),
+            "zip": self.zip_var.get(),
+            "zip_conservar": self.zip_conservar_var.get(),
             "carpeta_salida": self.output_path_var.get(),
             "nombre_archivo": self.output_filename_var.get(),
         }
@@ -1246,6 +1265,7 @@ class FaceSwapApp:
             "oclusion_modo": self.oclusion_modo_var,
             "fuerza_mejora": self.fuerza_gpen_var, "contenedor": self.contenedor_var, "codec": self.codec_var,
             "carpeta_salida": self.output_path_var, "nombre_archivo": self.output_filename_var,
+            "zip": self.zip_var, "zip_conservar": self.zip_conservar_var,
         }
         for clave, variable in variables.items():
             if clave in ajustes:
@@ -1263,6 +1283,7 @@ class FaceSwapApp:
             self.gpen_minimo_var.set(minimo.rstrip("%"))
         if "filtro" in ajustes:
             self.combofiltro.set(ajustes["filtro"])
+        self._estado_zip()
         self.config_cambiada()
 
     def actualizar_lista_configuraciones(self, elegida=None):
@@ -1808,6 +1829,22 @@ class FaceSwapApp:
     def es_carpeta(ruta):
         return bool(ruta) and os.path.isdir(ruta)
 
+    def _estado_zip(self):
+        """La contraseña y «conservar» solo se usan con el ZIP activado"""
+        estado = "normal" if self.zip_var.get() else "disabled"
+        self.zip_contrasena_entry.configure(state=estado)
+        self.zip_conservar_check.configure(state=estado)
+
+    def _guardar_zip(self, archivos, salida_zip, carpeta_en_zip=""):
+        """Mete los resultados en un ZIP con contraseña (AES-256). Devuelve el texto para el mensaje final"""
+        self.root.after(0, lambda: self.status_label.config(text="Guardando en ZIP con contraseña..."))
+        empaquetar(archivos, salida_zip, self.zip_contrasena_var.get(), conservar=self.zip_conservar_var.get(),
+                   carpeta_en_zip=carpeta_en_zip)
+        texto = f"en ZIP con contraseña:\n{salida_zip}\n(se abre con 7-Zip o WinRAR)"
+        if self.zip_conservar_var.get():
+            texto += "\nTambién se conservó el archivo suelto."
+        return texto
+
     def select_output_dir(self):
         dir_path = filedialog.askdirectory(initialdir=self.output_dir)
         if dir_path:
@@ -2040,6 +2077,15 @@ class FaceSwapApp:
         if self.processing:
             return
 
+        if self.zip_var.get():
+            if not zip_disponible():
+                messagebox.showerror("ZIP", "Para guardar en ZIP con contraseña falta instalar pyzipper:\n\n"
+                                     "pip install pyzipper")
+                return
+            if not self.zip_contrasena_var.get():
+                messagebox.showwarning("ZIP", "Escribe la contraseña del ZIP (o desmarca «Guardar en ZIP»)")
+                return
+
         try:
             self.validar_indices_fuente(self.obtener_caras_src())
         except Exception as e:
@@ -2228,7 +2274,16 @@ class FaceSwapApp:
                                 "mismas opciones, y elige «Sí» cuando pregunte.")
         else:
             self.root.after(0, lambda: self.progress.configure(value=100))
-            messagebox.showinfo("Éxito", f"Video guardado en {final_output}")
+            if self.zip_var.get():
+                try:
+                    texto = self._guardar_zip([final_output], ruta_zip(final_output))
+                except Exception as e:
+                    messagebox.showerror("ZIP", f"El video quedó en {final_output}, pero no se pudo guardar en "
+                                         f"el ZIP:\n\n{e}")
+                    return
+                messagebox.showinfo("Éxito", f"Video guardado {texto}")
+            else:
+                messagebox.showinfo("Éxito", f"Video guardado en {final_output}")
 
     def _mostrar_progreso(self, hechos, total):
         if total > 0:
@@ -2272,10 +2327,27 @@ class FaceSwapApp:
             for nombre, error in errores:
                 print(f"Error en {nombre}: {error}")
         if detenido:
-            messagebox.showinfo("Detenido", "Proceso detenido.\n\n" + mensaje)
-        else:
-            self.root.after(0, lambda: self.progress.configure(value=100))
-            (messagebox.showwarning if errores else messagebox.showinfo)("Carpeta procesada", mensaje)
+            messagebox.showinfo("Detenido", "Proceso detenido.\n\n" + mensaje +
+                                ("\n\nNo se creó el ZIP porque el proceso no terminó." if self.zip_var.get() else ""))
+            return
+        self.root.after(0, lambda: self.progress.configure(value=100))
+        if self.zip_var.get() and guardadas:
+            fallidas = {nombre for nombre, _ in errores}
+            archivos = [os.path.join(destino, os.path.basename(r)) for r in imagenes
+                        if os.path.basename(r) not in fallidas]
+            try:
+                texto = self._guardar_zip(archivos, ruta_zip(destino, es_carpeta=True),
+                                          carpeta_en_zip=os.path.basename(destino))
+                if not self.zip_conservar_var.get():
+                    try:
+                        os.rmdir(destino)  # solo si quedo vacia: no se borra nada que ya estuviera ahi
+                    except OSError:
+                        pass
+                mensaje = mensaje.replace(f"guardada(s) en {destino}", f"guardada(s) {texto}")
+            except Exception as e:
+                mensaje += f"\n\nNo se pudo guardar en el ZIP (las imágenes quedaron sueltas): {e}"
+                errores = errores or [("ZIP", str(e))]
+        (messagebox.showwarning if errores else messagebox.showinfo)("Carpeta procesada", mensaje)
 
     def _mostrar_progreso_carpeta(self, hechas, total):
         if total > 0:
@@ -2300,7 +2372,16 @@ class FaceSwapApp:
         
         self.status_label.config(text="Procesamiento de imagen completado")
         self.progress['value'] = 100
-        messagebox.showinfo("Éxito", f"Imagen guardada en {output_path}")
+        if self.zip_var.get():
+            try:
+                texto = self._guardar_zip([output_path], ruta_zip(output_path))
+            except Exception as e:
+                messagebox.showerror("ZIP", f"La imagen quedó en {output_path}, pero no se pudo guardar en el ZIP:"
+                                     f"\n\n{e}")
+                return
+            messagebox.showinfo("Éxito", f"Imagen guardada {texto}")
+        else:
+            messagebox.showinfo("Éxito", f"Imagen guardada en {output_path}")
 
     def show_preview(self):
         if self.preview_window:

@@ -7,6 +7,7 @@ Transfer-IA es una aplicación de cambio facial que utiliza inteligencia artific
 - Interfaz gráfica moderna y fácil de usar
 - Soporte para imágenes y videos
 - Vista previa que se actualiza sola al cambiar la configuración, con el original y el resultado lado a lado o con una línea deslizable de antes/después, y la zona cambiada (máscara) opcional
+- Guardar el resultado en un ZIP con contraseña (AES-256), sin dejar el video suelto en la carpeta (ver [Guardar en ZIP con contraseña](#guardar-en-zip-con-contraseña---zip))
 - Configuraciones guardadas: todas las opciones con un nombre, en JSON, para la interfaz y la CLI (ver [Configuraciones guardadas](#configuraciones-guardadas))
 - Procesamiento por lotes: una carpeta de imágenes como destino da otra carpeta con los resultados (ver [Carpeta de imágenes como destino](#carpeta-de-imágenes-como-destino))
 - Mejora de calidad facial integrada
@@ -62,6 +63,27 @@ pip install -r requirements.txt
 
 ## 📖 Uso
 
+### Google Colab
+
+`TransferIa_Colab.ipynb` usa TransferIa en Colab con formularios, como la interfaz (por debajo corre la CLI). Ábrelo en [colab.research.google.com](https://colab.research.google.com) → **Archivo → Subir cuaderno** (o desde GitHub: pestaña **GitHub** → `JuniorHZ19/TransferIA2`), elige **Entorno de ejecución → GPU T4** y corre las celdas en orden:
+
+| Celda | Qué hace |
+|---|---|
+| 1. Instalar | Descarga el programa de GitHub (la rama elegida) e instala las librerías. Avisa si no hay GPU. |
+| 2. Modelos | Trae los modelos desde un zip o una carpeta de tu Drive, o subiendo el zip (`modelsTransferIa.zip`). |
+| 3. Subir archivos | Opcional: sube fotos, videos o `.npy` y te da la ruta para los formularios. También sirven rutas de Drive. |
+| 4. Crear modelo de cara | Con fotos y/o videos (y sus fps); por defecto lo guarda en tu Drive para otras sesiones. |
+| 5. Ver personas | Para el modo identidad: analiza el video y muestra la miniatura y el número de cada persona. |
+| 6. Procesar | Todas las opciones: caras, índices, pegado, partes del destino, maquillaje, oclusión y su modo, nitidez, GPEN, video (hilos, códec, calidad, fragmento, continuar si quedó a medias), ZIP con contraseña y configuraciones guardadas. |
+| 7. Ver y descargar | Muestra el resultado, lo descarga a tu PC o lo copia a tu Drive. |
+
+Notas:
+
+- El cuaderno usa la versión del programa **que está en GitHub**: los cambios hechos en la PC tienen que estar subidos (`git push`).
+- En Colab conviene el códec `h264_nvenc` (usa la GPU) y unos 4 hilos.
+- La contraseña del ZIP se pide al correr la celda 6 (no se escribe en el formulario ni se guarda).
+- Si se corta la sesión con un video a medias, al volver a correr la celda 6 con la misma salida continúa desde donde quedó (si la carpeta `output` sigue existiendo; al reiniciar Colab se borra, salvo que la salida esté en Drive).
+
 ### Interfaz gráfica
 
 Ejecute la aplicación sin argumentos:
@@ -75,13 +97,14 @@ En la interfaz principal:
    - Seleccione o arrastre una imagen de origen (rostro a transferir), o un modelo de cara `.npy` (ver [Modelos de cara](#modelos-de-cara-npy))
    - Seleccione o arrastre una imagen/video de destino, o una carpeta de imágenes (arrastrándola o con el botón **Carpeta de imágenes...**; ver [Carpeta de imágenes como destino](#carpeta-de-imágenes-como-destino))
    - Seleccione la carpeta de salida para los resultados
+   - Opcional, **Guardar en ZIP con contraseña** (en "Configuración de Salida"): el resultado se guarda en un `.zip` cifrado y no queda suelto en la carpeta (ver [Guardar en ZIP con contraseña](#guardar-en-zip-con-contraseña---zip))
    - Opcional, **Configuración guardada** (debajo de "Abrir Preview"): elige una configuración guardada para poner todas las opciones de una vez, o guarda las actuales con **Guardar como...** (ver [Configuraciones guardadas](#configuraciones-guardadas))
    - Opcional, en "Configuración". Cada fila es una función, con su nombre a la izquierda, en el orden en que se aplican:
 
      | Fila | Opciones |
      |---|---|
      | **Caras** | **Asignación**: `posicion` (izquierda a derecha, como siempre) o `identidad` (ver [Asignación por identidad](#asignación-por-identidad---asignacion-identidad)). **Género destino**: `todos`, `mujer` u `hombre`. **Análisis de personas** (solo con `identidad`): frames por segundo (`1`) y máximo de frames (`300`) del análisis previo del video |
-     | **Índices** | **Fuente** y **Destino**: qué cara fuente va en qué cara destino (`0`, `0,1`...). En modo identidad con video, Destino es el número de persona (0 = la que más aparece); el botón **Ver personas...** muestra quién es cada una (ver [Asignación por identidad](#asignación-por-identidad---asignacion-identidad)) |
+     | **Índices** | **Fuente** y **Destino**: qué cara fuente va en qué cara destino (`0`, `0,1`...). Una misma fuente puede ir a varias caras repitiendo su número: Fuente `0,0` y Destino `0,1` pone la cara 0 en las dos. En modo identidad con video, Destino es el número de persona (0 = la que más aparece); el botón **Ver personas...** muestra quién es cada una (ver [Asignación por identidad](#asignación-por-identidad---asignacion-identidad)) |
      | **Pegado** | **Máscara**: `normal`, `amplia` (por defecto) o `maxima`, cuánta zona de la cara se cambia (ver [Zona de la cara](#zona-de-la-cara---face-mask)). **Corrección de color**: `ninguna` (por defecto), `suave` o `completa`, iguala el color de la cara cambiada a la piel del destino (ver [Corrección de color](#corrección-de-color---color)) |
      | **Del destino** | **Ojos / Boca / Nariz**: cambia la cara pero deja esas partes originales del destino (ver [ojos](#conservar-ojos-del-destino), [boca](#conservar-boca-del-destino---mouth) y [nariz](#conservar-nariz-del-destino---nose)). **Frente (quitar cerquillo)**: la frente queda la del destino, para cuando la fuente tiene cerquillo (ver [Quitar el cerquillo](#quitar-el-cerquillo-de-la-fuente---remove-bangs)). **Maquillaje**: deslizador de 0 (desactivado) a 1; devuelve el maquillaje o la pintura de cara del destino (ver [Conservar maquillaje](#conservar-maquillaje---makeup)) |
      | **Oclusión** | **Activar**: deja el pelo, las manos y los objetos delante de la cara. **Modo**: `debil`, `adaptable` (por defecto) o `fuerte`, cuánta cara puede quedar sobre lo que la tapa (ver [Modo de la oclusión](#modo-de-la-oclusión---oclusion-modo)) |
@@ -174,6 +197,14 @@ src/fotos/                 output/fotos_output/
 - En modo `identidad`, las personas se reconocen entre una imagen y otra (la persona 0 es la primera que aparece, en orden de nombre de archivo). En la CLI, las miniaturas de cada identidad van a `output/fotos_output_identidades/`.
 - `--start` y `--end` (fragmento) son solo para videos y se ignoran.
 
+Una sola cara fuente para varias caras del destino (repitiendo el índice fuente):
+
+```bash
+python cli.py process --source "src/rostro.jpg" --target "src/foto_grupo.jpg" --output "output/resultado.jpg" --source-index 0,0,0 --target-index 0,1,2
+```
+
+Si en algún frame no está una de esas caras (por ejemplo, en el video a veces hay una sola persona), ese par se salta y las demás se cambian igual.
+
 Opciones de `process`:
 
 ```text
@@ -183,7 +214,8 @@ Opciones de `process`:
 --output PATH              archivo de salida; con una carpeta en --target, la carpeta donde se crea
                            <nombre>_output con las imagenes procesadas
 --models-dir PATH          carpeta de modelos (por defecto: models)
---source-index INDICES     indices de origen, por ejemplo 0,1
+--source-index INDICES     indices de origen, por ejemplo 0,1; se pueden repetir para usar una misma
+                           fuente en varias caras (--source-index 0,0 --target-index 0,1)
 --target-index INDICES     indices de destino, por ejemplo 0,1
                            (en modo identidad con video: numero de persona, 0 = la que mas aparece)
 --asignacion MODO          posicion (por defecto) o identidad
@@ -229,6 +261,10 @@ Opciones de `process`:
 --resume                   continúa un video que se cortó, desde donde quedó
 --restart                  borra un proceso sin terminar de esa salida y empieza de cero
 --verbose                  muestra el progreso por frame
+--zip                      guarda el resultado en un .zip con contraseña (AES-256) y borra el archivo
+                           suelto; la contraseña se pide al empezar, sin mostrarla
+--zip-password CLAVE       contraseña del --zip sin preguntarla (queda en el historial: mejor no usarla)
+--zip-conservar            con --zip, conserva tambien el archivo suelto
 --config NOMBRE            usa una configuracion guardada (configuraciones/NOMBRE.json, o la ruta a un
                            .json); lo escrito en el comando tiene prioridad (ver Configuraciones guardadas)
 --save-config NOMBRE       guarda las opciones de este comando como configuracion NOMBRE
@@ -730,6 +766,41 @@ Con modelo de cara, ojos y boca del destino y corrección de color:
 python cli.py process --source "src/modelos_caras/persona1.npy" --target "src/video.mp4" --output "output/resultado.mp4" --occlusion --eyes --mouth --color suave --overwrite
 ```
 
+### Guardar en ZIP con contraseña (`--zip`)
+
+Para que el video (o la imagen) resultante no quede suelto en la carpeta: al terminar se guarda en un `.zip` cifrado con **AES-256** y se borra el archivo suelto.
+
+**En la interfaz**, en "Configuración de Salida":
+
+- **Guardar en ZIP con contraseña**: actívalo y escribe la **Contraseña** (se ve con puntos). Sin contraseña no deja empezar.
+- **Conservar también el archivo suelto** (opcional, desmarcado): deja el `.mp4` o `.jpg` además del ZIP.
+
+**En la CLI**:
+
+```bash
+python cli.py process --source "src/cara.jpg" --target "src/video.mp4" --output "output/resultado.mp4" --zip
+```
+
+Pide la contraseña dos veces sin mostrarla. `--zip-password CLAVE` la pasa sin preguntar, pero queda guardada en el historial de comandos. `--zip-conservar` conserva también el archivo suelto. Si el ZIP ya existe, hace falta `--overwrite`.
+
+| Resultado | ZIP |
+|---|---|
+| Video `output/resultado.mp4` | `output/resultado.zip` con `resultado.mp4` adentro |
+| Imagen `output/resultado.jpg` | `output/resultado.zip` con `resultado.jpg` adentro |
+| Carpeta `output/fotos_output/` | `output/fotos_output.zip` con la carpeta `fotos_output/` y todas las imágenes |
+
+Cómo funciona y qué hay que saber:
+
+- **Para abrirlo hace falta 7-Zip o WinRAR** (gratis). El Explorador de Windows no abre ZIP con AES-256; los que sí abre usan un cifrado débil (ZipCrypto) que se rompe con programas en minutos.
+- **No se borra nada hasta comprobar el ZIP**: se vuelve a abrir con la contraseña, se revisa que cada archivo esté completo (control CRC y tamaño) y recién entonces se borra el suelto. Si algo falla, el archivo suelto queda y se avisa.
+- **La contraseña no se guarda en ningún lado**, tampoco en las [configuraciones guardadas](#configuraciones-guardadas) (que sí recuerdan si el ZIP está activado). Si se olvida, el contenido no se puede recuperar.
+- Sin contraseña se ven los nombres de los archivos que hay adentro, pero no su contenido.
+- Los videos e imágenes ya vienen comprimidos: el ZIP no los achica (se guardan tal cual, que es más rápido).
+- **Mientras se procesa**, el video se va guardando en pedazos en una carpeta temporal (para poder detener y continuar), y el `.mp4` final existe unos segundos antes de pasar al ZIP. Un archivo borrado se puede recuperar con programas especiales; para proteger todo el disco está BitLocker de Windows.
+- Si se pulsa **Detener**, no se crea el ZIP (el proceso no terminó).
+- Con una carpeta de imágenes se guardan en el ZIP las imágenes de este proceso, y la carpeta suelta se borra solo si queda vacía (no se borra nada que ya estuviera ahí).
+- Requiere la librería `pyzipper` (`pip install pyzipper`, ya está en `requirements.txt`).
+
 ### Configuraciones guardadas
 
 Todas las opciones se pueden guardar con un nombre (por ejemplo `catrina` o `natural`) y volver a usarlas después, sin marcar todo otra vez. Cada configuración es un archivo JSON en `configuraciones/<nombre>.json`.
@@ -753,7 +824,7 @@ python cli.py process --source "src/cara.jpg" --target "src/video.mp4" --output 
 
 Las configuraciones son las mismas para la interfaz y la CLI: una guardada en una se puede usar en la otra.
 
-**Qué se guarda:** asignación, género, índices fuente y destino, máscara, corrección de color, ojos, boca, nariz, frente, maquillaje, oclusión (y su modo), filtro de nitidez, mejora GPEN (activada, fuerza y cara mínima), número de hilos, video temporal, códec, carpeta de salida y nombre del archivo. **No se guardan** la fuente, el destino ni el fragmento: una configuración dice *cómo* procesar, no *qué*. La carpeta de salida y el nombre del archivo solo los usa la interfaz (en la CLI la salida es `--output`).
+**Qué se guarda:** asignación, género, índices fuente y destino, máscara, corrección de color, ojos, boca, nariz, frente, maquillaje, oclusión (y su modo), filtro de nitidez, mejora GPEN (activada, fuerza y cara mínima), número de hilos, video temporal, códec, carpeta de salida, nombre del archivo y si se guarda en ZIP (sin la contraseña). **No se guardan** la fuente, el destino ni el fragmento: una configuración dice *cómo* procesar, no *qué*. La carpeta de salida y el nombre del archivo solo los usa la interfaz (en la CLI la salida es `--output`).
 
 Ejemplo de `configuraciones/catrina.json`:
 

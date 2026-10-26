@@ -5,3 +5,4 @@ pillow>=8.0.0
 insightface>=0.7.0
 onnxruntime-gpu>=1.8.0
 tkinterdnd2
+pyzipper>=0.3.6

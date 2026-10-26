@@ -10,6 +10,7 @@ from core.Modelo_Cara import Modelo_Cara, FPS_VIDEO, MAX_FRAMES_VIDEO
 from core.Mejorador import validar_minimo, MINIMO_POR_DEFECTO
 from core.Proceso_Carpeta import imagenes_carpeta, carpeta_salida, procesar_carpeta, SUFIJO_SALIDA
 from core import Configuraciones
+from core.Empaquetar import empaquetar, ruta_zip, disponible as zip_disponible
 from core.Personas import (Personas, validar_fps, validar_maximo, FPS as PERSONAS_FPS,
                            MAX_FRAMES as PERSONAS_MAX)
 from core.Proceso_Video import (procesar_video, Trabajo_Video, CONTENEDORES, CODECS, CALIDAD, info_video,
@@ -272,6 +273,22 @@ def build_parser():
         help="muestra informacion detallada",
     )
     process_parser.add_argument(
+        "--zip",
+        action="store_true",
+        help="guarda el resultado en un .zip con contraseña (AES-256; se abre con 7-Zip o WinRAR) y borra el "
+             "archivo suelto. La contraseña se pide al empezar, sin mostrarla",
+    )
+    process_parser.add_argument(
+        "--zip-password",
+        metavar="CONTRASEÑA",
+        help="contraseña del --zip sin preguntarla (queda en el historial de comandos: mejor no usarla)",
+    )
+    process_parser.add_argument(
+        "--zip-conservar",
+        action="store_true",
+        help="con --zip, conserva también el archivo suelto",
+    )
+    process_parser.add_argument(
         "--config",
         metavar="NOMBRE",
         help=f"usa una configuracion guardada ({Configuraciones.CARPETA_CONFIGURACIONES}/<NOMBRE>.json, o la ruta "
@@ -487,7 +504,7 @@ def _show_progress(current, total, label="Procesando"):
 
 # Opciones que no cambian el resultado: no cuentan para decidir si un video cortado se puede continuar
 _OPCIONES_SIN_EFECTO = {"command", "target", "output", "overwrite", "threads", "verbose", "resume", "restart",
-                        "no_audio", "models_dir", "start", "end", "config", "save_config",
+                        "no_audio", "models_dir", "start", "end", "config", "save_config", "zip", "zip_password", "zip_conservar",
                         "_process_parser"}  # el fragmento se revisa aparte (Trabajo_Video)
 
 
@@ -691,6 +708,20 @@ def run_combinar_modelos(args):
         return 1
 
 
+def _pedir_contrasena():
+    """Contraseña del ZIP, escrita dos veces y sin mostrarla en pantalla"""
+    import getpass
+    for _ in range(3):
+        primera = getpass.getpass("Contraseña del ZIP: ")
+        if not primera:
+            print("La contraseña no puede estar vacía")
+            continue
+        if getpass.getpass("Repite la contraseña: ") == primera:
+            return primera
+        print("Las contraseñas no coinciden")
+    raise ValueError("No se ingresó la contraseña del ZIP")
+
+
 def run_cli(args):
     try:
         target_path = os.path.abspath(args.target)
@@ -718,6 +749,14 @@ def run_cli(args):
 
         _parse_indices(args.source_index)
         _parse_indices(args.target_index)
+        contrasena = None
+        if args.zip:
+            if not zip_disponible():
+                raise RuntimeError("Para --zip falta instalar pyzipper: pip install pyzipper")
+            destino_zip = ruta_zip(output_path, es_carpeta=es_carpeta)
+            if os.path.exists(destino_zip) and not args.overwrite:
+                raise FileExistsError(f"El ZIP ya existe; usa --overwrite: {destino_zip}")
+            contrasena = args.zip_password or _pedir_contrasena()
         os.makedirs(output_path if es_carpeta else os.path.dirname(output_path), exist_ok=True)
 
         models_dir = os.path.abspath(args.models_dir)
@@ -738,6 +777,23 @@ def run_cli(args):
                 print("Aviso: --start y --end son solo para videos; en imagenes se ignoran", flush=True)
             _process_image(swapper, caras_src, target_path, output_path, args)
 
+        if contrasena:
+            if es_carpeta:
+                archivos = [os.path.join(output_path, n) for n in sorted(os.listdir(output_path))
+                            if os.path.isfile(os.path.join(output_path, n))]
+                empaquetar(archivos, destino_zip, contrasena, conservar=args.zip_conservar,
+                           carpeta_en_zip=os.path.basename(output_path))
+                if not args.zip_conservar:
+                    try:
+                        os.rmdir(output_path)
+                    except OSError:
+                        pass
+            else:
+                empaquetar([output_path], destino_zip, contrasena, conservar=args.zip_conservar)
+            print(f"Resultado guardado en: {destino_zip} (con contraseña; se abre con 7-Zip o WinRAR)")
+            if args.zip_conservar:
+                print(f"Tambien se conservo: {output_path}")
+            return 0
         print(f"Resultado guardado en: {output_path}")
         return 0
     except _Detenido as aviso:
@@ -756,6 +812,7 @@ _CONFIG_A_OPCION = {
     "indices_fuente": "source_index", "indices_destino": "target_index",
     "mascara": "face_mask", "color": "color",
     "ojos": "eyes", "boca": "mouth", "nariz": "nose", "frente": "remove_bangs",
+    "zip": "zip", "zip_conservar": "zip_conservar",
     "maquillaje": "makeup", "oclusion": "occlusion", "oclusion_modo": "oclusion_modo", "filtro": "occlusion_mode",
     "minimo_mejora": "enhance_min_size", "hilos": "threads",
     "contenedor": "container", "codec": "video_codec",
