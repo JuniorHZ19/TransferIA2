@@ -1,0 +1,28 @@
+{
+  "nombre": "confighd",
+  "version": 1,
+  "guardado": "2026-10-26T00:33:07",
+  "ajustes": {
+    "asignacion": "posicion",
+    "genero": "todos",
+    "indices_fuente": "8,5",
+    "indices_destino": "0,1",
+    "mascara": "normal",
+    "color": "ninguna",
+    "ojos": false,
+    "boca": false,
+    "nariz": false,
+    "frente": false,
+    "maquillaje": 0.0,
+    "oclusion": true,
+    "filtro": "natural",
+    "mejorar": true,
+    "fuerza_mejora": 0.499,
+    "minimo_mejora": "12%",
+    "hilos": 2,
+    "contenedor": "mp4frag",
+    "codec": "libx264",
+    "carpeta_salida": "output",
+    "nombre_archivo": "resultado"
+  }
+}

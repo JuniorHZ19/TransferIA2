@@ -16,6 +16,25 @@ FFHQ_TEMPLATE = np.array([
     [0.61150205, 0.72490465],  # boca der
 ], dtype=np.float32)
 
+# Nitidez de la cara pegada. La cara de inswapper sale de un recorte de 128 px, asi que su detalle esta a una
+# escala de (ancho de la cara / 128) px: el radio del enfoque se calcula con esa escala.
+# natural / strong: fuerza fija del enfoque (mascara de enfoque sobre la luz).
+NITIDEZ_FIJA = {"natural": 0.8, "strong": 1.6}
+
+# Modo de la oclusion: cuanto se respeta lo que tapa la cara (pelo, manos, objetos) en el borde difuminado.
+#   debil      la mascara difuminada tal cual (como antes): en el borde de un objeto queda hasta ~46 % de cara
+#              y dentro del objeto un poco (7-16 %), porque el difuminado "derrama" cara hacia el objeto
+#   adaptable  nunca mas cara de la que marca el modelo: el difuminado solo suaviza hacia la piel, no tapa
+#              el objeto (dentro 0 %, en el borde exacto ~30 %); la transicion del lado de la piel no cambia
+#   fuerte     ademas contrae la mascara (lo que queda bajo 50 % pasa a 0): el objeto queda limpio hasta su
+#              borde, pero la cara nueva retrocede unos pixeles junto al objeto
+MODOS_OCLUSION = ("debil", "adaptable", "fuerte")
+# adaptativo: la fuerza se busca para que el detalle de la cara llegue a esta fraccion del detalle del destino
+# (sin pasar de NITIDEZ_MAXIMA), y se agrega grano hasta GRANO_OBJETIVO del ruido del destino.
+NITIDEZ_OBJETIVO = 0.9
+NITIDEZ_MAXIMA = 3.0
+GRANO_OBJETIVO = 0.85
+
 class DFL_XSeg_Model:
     _XSEG_SESSION = None
     _LOCK = threading.Lock()
@@ -227,11 +246,19 @@ class DFL_XSeg_Model:
             return None
         
 
-    def frame_with_occlusion(self, frame, fake_frame, face, mode="natural"):
+    def frame_with_occlusion(self, frame, fake_frame, face, mode="natural", devolver_mascara=False,
+                             modo_oclusion="debil"):
         """
         Proceso mejorado para una fusión suave entre la cara fake y el fondo,
-        aplicando nitidez solo a la cara fake
+        aplicando nitidez solo a la cara fake.
+        Con devolver_mascara=True devuelve (resultado, mascara): cuanto de cada pixel viene de fake_frame
+        (0 a 1, del tamaño del frame), o 0.0 / 1.0 si se devolvio todo el frame o todo el fake
+        modo_oclusion: debil, adaptable o fuerte (ver MODOS_OCLUSION)
         """
+        resultado, mascara = self._oclusion(frame, fake_frame, face, mode, modo_oclusion)
+        return (resultado, mascara) if devolver_mascara else resultado
+
+    def _oclusion(self, frame, fake_frame, face, mode, modo_oclusion="debil"):
         try:
             # Asegurar que los frames son arrays de numpy con el tipo correcto
             frame = np.asarray(frame).astype(np.uint8)
@@ -239,34 +266,44 @@ class DFL_XSeg_Model:
             
             if frame.shape != fake_frame.shape:
                 print(f"Error: Shape mismatch - frame: {frame.shape}, fake_frame: {fake_frame.shape}")
-                return frame
+                return frame, 0.0
             
-            # 1. Aplicar filtro de nitidez solo a la cara fake
-            fake_frame_nitido = self.filtro_image(fake_frame, mode)
-            
-            # 2. Obtener la máscara base
+            # 1. Obtener la máscara base
             mascara = self.get_complete_mask(frame, face)
             if mascara is None:
                 print("Warning: No se pudo generar la máscara")
-                return fake_frame_nitido
-            
+                return self.filtro_image(fake_frame, mode, face=face), 1.0
+
             # Validar que la máscara no esté vacía y tenga valores válidos
             if np.max(mascara) == 0:
                 print("Warning: Máscara vacía detectada")
-                return frame
-            
-            # 3. Crear una máscara suave para la transición con parámetros más conservadores
-            mascara_suave = cv2.GaussianBlur(mascara, (15,15), 7)
-            
+                return frame, 0.0
+
+            # 2. Aplicar nitidez solo a la cara fake (el modo adaptativo la mide dentro de la mascara)
+            fake_frame_nitido = self.filtro_image(fake_frame, mode, face=face, frame=frame, mascara=mascara)
+
+            # 3. Difuminado del borde proporcional al tamaño de la cara (antes fijo: 7 y 15 px de sigma,
+            # que en caras pequeñas borraba el borde y en caras grandes lo dejaba marcado)
+            dist_ojos = float(np.linalg.norm(face.kps[1] - face.kps[0])) if getattr(face, "kps", None) is not None else 80.0
+            sigma_suave = max(1.0, dist_ojos * 0.09)
+            sigma_bordes = max(2.0, dist_ojos * 0.19)
+            mascara_suave = cv2.GaussianBlur(mascara, (0, 0), sigma_suave)
+
             # 4. Convertir la máscara a float y normalizar con validación
             mascara_norm = np.clip(mascara_suave.astype(float) / 255.0, 0, 1)
-            
-            # 5. Crear una versión más suave para los bordes con parámetros más conservadores
-            mascara_bordes = cv2.GaussianBlur(mascara, (31,31), 15)
+
+            # 5. Crear una versión más suave para los bordes
+            mascara_bordes = cv2.GaussianBlur(mascara, (0, 0), sigma_bordes)
             mascara_bordes = np.clip(mascara_bordes.astype(float) / 255.0, 0, 1)
             
             # 6. Combinar las máscaras para una mejor transición
             mascara_final = np.clip(mascara_norm * 0.8 + mascara_bordes * 0.2, 0, 1)
+
+            # 6b. Que el difuminado no pinte cara sobre lo que la tapa (ver MODOS_OCLUSION)
+            if modo_oclusion in ("adaptable", "fuerte"):
+                mascara_final = np.minimum(mascara_final, mascara.astype(float) / 255.0)
+            if modo_oclusion == "fuerte":
+                mascara_final = (mascara_final.clip(0.5, 1) - 0.5) * 2
             
             # 7. Expandir la máscara para manejar los canales de color
             if len(mascara_final.shape) == 2:
@@ -275,7 +312,7 @@ class DFL_XSeg_Model:
             # Validar la forma final de la máscara
             if mascara_final.shape[:2] != frame.shape[:2]:
                 print("Error: Dimensiones de máscara incorrectas")
-                return frame
+                return frame, 0.0
             
             #cv2.imshow("final",mascara_final)
             
@@ -283,40 +320,122 @@ class DFL_XSeg_Model:
             result = (frame * (1 - mascara_final) + fake_frame_nitido * mascara_final)
             
             # 9. Asegurar que los valores estén en el rango correcto
+            # (ya no se desenfoca el fotograma completo al final: ablandaba el fondo y quitaba la nitidez)
             result = np.clip(result, 0, 255).astype(np.uint8)
-            
-            # 10. Aplicar un suavizado final más sutil
-            result = cv2.GaussianBlur(result, (3,3), 0.5)
-            
-            return result
+
+            return result, mascara_final[..., 0]
             
         except Exception as e:
             print(f"Error detallado en frame_with_occlusion: {str(e)}")
             import traceback
             traceback.print_exc()
-            return frame
+            return frame, 0.0
     
     
-    def filtro_image(self,image,mode="None"):
+    def filtro_image(self, image, mode="None", face=None, frame=None, mascara=None):
 
-      """Aumenta la nitidez de la imagen tiene 3 modos uno suave otro fuerte y otro none que no aplica ni un filtro"""
+      """
+       Aumenta la nitidez de la cara fake. Modos:
+          None        sin filtro
+          natural     enfoque suave (fuerza fija)
+          strong      enfoque fuerte (fuerza fija)
+          adaptativo  iguala el detalle y el grano de la cara original del destino (necesita frame y mascara)
+       Se enfoca solo la luz (canal L de LAB, sin halos de color) con una mascara de enfoque
+       L + fuerza * (L - desenfoque(L)), cuyo radio sigue el tamaño de la cara (detalle a escala ancho/128).
+       Solo se procesa el rectangulo de la cara, no el fotograma entero.
+      """
 
-      if image is None or image.size == 0:
+      if image is None or image.size == 0 or mode not in ("natural", "strong", "adaptativo"):
         return image
-      
-      if mode == "strong":
-       kernel_nitidez = np.array([[-1,-1,-1],
-                             [-1, 9,-1],
-                             [-1,-1,-1]])
-       
-      elif  mode=="natural":
-        kernel_nitidez = np.array([[0, -1, 0],
-                                  [-1, 5, -1],
-                                  [0, -1, 0]])
-      elif mode =="None":
-         return image
-          
-      return cv2.filter2D(image, -1, kernel_nitidez)
+      if mode == "adaptativo" and (frame is None or mascara is None):
+        mode = "natural"
+
+      # Rectangulo de trabajo: la mascara si existe, si no el bbox de la cara agrandado
+      alto, ancho = image.shape[:2]
+      if mascara is not None and np.any(mascara > 25):
+        ys, xs = np.where(mascara > 25)
+        x1, x2, y1, y2 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+      elif face is not None:
+        bx1, by1, bx2, by2 = face.bbox
+        margen = (bx2 - bx1) * 0.3
+        x1, y1 = int(max(0, bx1 - margen)), int(max(0, by1 - margen))
+        x2, y2 = int(min(ancho, bx2 + margen)), int(min(alto, by2 + margen))
+      else:
+        x1, y1, x2, y2 = 0, 0, ancho, alto
+      if x2 - x1 < 4 or y2 - y1 < 4:
+        return image
+
+      ancho_cara = float(face.bbox[2] - face.bbox[0]) if face is not None else 128.0
+      sigma = max(0.6, 0.8 * ancho_cara / 128.0)
+
+      recorte = image[y1:y2, x1:x2]
+      lab = cv2.cvtColor(recorte, cv2.COLOR_BGR2LAB).astype(np.float32)
+      luz = lab[..., 0]
+      detalle = luz - cv2.GaussianBlur(luz, (0, 0), sigma)
+
+      if mode in NITIDEZ_FIJA:
+        nueva = luz + NITIDEZ_FIJA[mode] * detalle
+      else:
+        zona = self._zona_piel(mascara[y1:y2, x1:x2], face, x1, y1)
+        if zona is None:
+          nueva = luz + NITIDEZ_FIJA["natural"] * detalle
+        else:
+          luz_dst = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32)
+          objetivo = NITIDEZ_OBJETIVO * self._detalle(luz_dst, zona)
+          fuerza = self._buscar_fuerza(luz, detalle, zona, objetivo)
+          nueva = luz + fuerza * detalle
+
+          # Grano: la cara generada sale mas limpia que la foto; se agrega ruido hasta parecerse al destino
+          grano_dst = self._grano(luz_dst, zona)
+          grano_fake = self._grano(nueva, zona)
+          falta = GRANO_OBJETIVO ** 2 * grano_dst ** 2 - grano_fake ** 2
+          if falta > 0:
+            nueva = nueva + np.random.normal(0.0, np.sqrt(falta), nueva.shape).astype(np.float32)
+
+      lab[..., 0] = np.clip(nueva, 0, 255)
+      resultado = image.copy()
+      resultado[y1:y2, x1:x2] = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+      return resultado
+
+    @staticmethod
+    def _zona_piel(mascara, face, x1, y1):
+      """Pixeles de la cara donde medir detalle y grano: mascara de oclusion firme, sin el borde"""
+      zona = (mascara > 200).astype(np.uint8)
+      if face is not None and getattr(face, "kps", None) is not None:
+        k = max(3, int(np.linalg.norm(face.kps[1] - face.kps[0]) * 0.15) | 1)
+        zona = cv2.erode(zona, np.ones((k, k), np.uint8))
+      zona = zona.astype(bool)
+      return zona if zona.sum() >= 64 else None
+
+    @staticmethod
+    def _detalle(luz, zona):
+      """Cantidad de detalle fino: varianza del laplaciano dentro de la zona"""
+      return float(cv2.Laplacian(luz, cv2.CV_32F)[zona].var())
+
+    @staticmethod
+    def _grano(luz, zona):
+      """Ruido o grano: desviacion de lo que queda al quitar un desenfoque de 1 px"""
+      return float((luz - cv2.GaussianBlur(luz, (0, 0), 1.0))[zona].std())
+
+    @staticmethod
+    def _buscar_fuerza(luz, detalle, zona, objetivo):
+      """
+       Fuerza del enfoque (0 a NITIDEZ_MAXIMA) con la que el detalle de la cara llega al objetivo.
+      El laplaciano es lineal: Lap(luz + f*detalle) = A + f*B, asi que su varianza es una parabola en f
+      (var(A) + 2f cov(A,B) + f² var(B)) y la fuerza sale directa, sin probar valores.
+      """
+      A = cv2.Laplacian(luz, cv2.CV_32F)[zona].astype(np.float64)
+      B = cv2.Laplacian(detalle, cv2.CV_32F)[zona].astype(np.float64)
+      A -= A.mean()
+      B -= B.mean()
+      var_a, cov, var_b = (A * A).mean(), (A * B).mean(), (B * B).mean()
+      if var_a >= objetivo:
+        return 0.0
+      if var_b <= 1e-9:
+        return 0.0
+      # f² var_b + 2f cov + (var_a - objetivo) = 0, raiz positiva
+      fuerza = (-cov + np.sqrt(max(0.0, cov * cov - var_b * (var_a - objetivo)))) / var_b
+      return float(np.clip(fuerza, 0.0, NITIDEZ_MAXIMA))
 
     def blend_with_mask(self,img1, img2, mask):
       

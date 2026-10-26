@@ -54,10 +54,13 @@ class Analyzer_Faces:
        Analyzer_Faces._ANALIZADOR_CARA.prepare(ctx_id, det_size=(dimension, dimension))
 
 
-    def obtener_caras(self, frame , ordenamiento="iz-de"):
+    def obtener_caras(self, frame , ordenamiento="iz-de", genero="todos"):
 
-        '''Retornaremos el conjunto de caras que detecta nuestro analizador  usaremos get(img) de Anylzer_Faces cual devuelve un arrray de Faces'''
+        '''Retornaremos el conjunto de caras que detecta nuestro analizador  usaremos get(img) de Anylzer_Faces cual devuelve un arrray de Faces.
+           "genero" puede ser "todos", "mujer" o "hombre" para quedarse solo con esas caras'''
         caras=self.detectar_con_rotacion(frame)
+
+        caras=self.filtrar_genero(caras,genero)
 
         caras_ordenadas=self.ordenamiento_caras(caras,ordenamiento)
 
@@ -161,6 +164,15 @@ class Analyzer_Faces:
         if np.linalg.norm(mejor.kps.mean(0) - centro) > dist_ojos or mejor.det_score < cara.det_score * 0.9:
             return cara
         return mejor
+
+    def filtrar_genero(self, caras, genero="todos"):
+
+        '''Filtra las caras por el genero que estima buffalo_l (face.gender: 0 = mujer, 1 = hombre)'''
+        if genero == "mujer":
+            return [c for c in caras if c.get("gender") == 0]
+        if genero == "hombre":
+            return [c for c in caras if c.get("gender") == 1]
+        return caras
 
     def obtener_cara(self, frame, posicion):
 
