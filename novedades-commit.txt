@@ -1,0 +1,40 @@
+Primeros planos, video de prueba, extraer caras por persona y documentación
+
+Caras en primer plano
+- Detecta caras que llenan el cuadro (selfies, primeros planos): antes se
+  perdían desde el 70-80 % del ancho (55 % al crear modelos); ahora se
+  detectan del 40 % al 140 %, con error de 1-8 %
+- Sin borde oscuro cuando la cara toca el borde de la imagen (antes salía
+  11-16 % más oscuro)
+- Máscara xseg rellenada también en esos casos
+
+Caras inclinadas
+- Ahora se puede desactivar: casilla "Caras inclinadas" o --sin-inclinadas
+- Mezcla gradual de puntos entre 10° y 20°: la cara ya no "tiembla" cuando
+  la cabeza se mueve cerca de ese ángulo
+
+Video
+- Corrige el desfase entre imagen y audio en videos que lo traen
+  (de 470 ms a 3 ms) y avisa cuando lo detecta
+- Video de prueba: botón "Video de prueba" o --prueba [FPS]; procesa el
+  fragmento elegido o los primeros 10 s a pocos fps (prueba de 20 s:
+  172 s contra 490 s normal)
+
+Modelos de cara
+- "Revisar las caras antes de crear el modelo" / --extraer-caras: guarda
+  las caras de cada persona en carpetas persona_N, de mejor a peor, para
+  borrar las malas y crear el modelo después
+
+Carpetas y rutas
+- Vista previa de carpetas: < Anterior / Siguiente >, flechas del teclado
+  y barra para recorrer las imágenes (3/25 · nombre.jpg)
+- Rutas y nombres con tildes y ñ (core/Imagenes.py)
+- Nombres de archivo muy largos se acortan para no fallar en Windows
+
+Colab
+- La barra de progreso se reescribe en una sola línea
+
+Documentación
+- README actualizado con todo lo anterior
+- Manual de usuario, manual técnico, 12 documentos de cambios (Word + PDF)
+  e historial de cambios en doc/
