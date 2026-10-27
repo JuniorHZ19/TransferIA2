@@ -25,6 +25,11 @@ SALTO_LEYENDO = 300
 
 VERSION_PROGRESO = 1
 
+# Video de prueba: fps y segundos por defecto (si no se eligio un fragmento). 10 fps = un tercio del trabajo de
+# un video a 30 y alcanza para juzgar parecido, color y oclusion; menos se ve entrecortado (se pierden parpadeos)
+FPS_PRUEBA = 10
+SEGUNDOS_PRUEBA = 10
+
 
 class Cancelado(Exception):
     pass
@@ -123,6 +128,74 @@ def fragmento_en_frames(inicio, fin, fps, total):
     if primero == 0 and ultimo >= total:
         return None
     return primero, ultimo
+
+
+def problemas_de_tiempo(ruta):
+
+    '''
+     Lo que haria que el resultado quede con el audio desfasado si se procesa el video tal cual (los frames se
+    escriben a ritmo fijo y el audio se pega desde el principio). Devuelve una lista de motivos ([] = ninguno):
+        ritmo variable   los frames no van siempre al mismo ritmo (grabaciones de VLC, de pantalla o del celular)
+        inicio distinto  el audio y la imagen no empiezan en el mismo momento
+    '''
+
+    salida = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                             "stream=codec_type,r_frame_rate,avg_frame_rate,start_time", "-of", "json", ruta],
+                            capture_output=True, text=True)
+    try:
+        streams = json.loads(salida.stdout).get("streams", [])
+    except ValueError:
+        return []
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    if video is None:
+        return []
+
+    def fraccion(texto):
+        try:
+            a, b = str(texto).split("/")
+            return float(a) / float(b) if float(b) else 0.0
+        except ValueError:
+            return 0.0
+
+    def inicio(stream):
+        try:
+            return float(stream.get("start_time"))
+        except (TypeError, ValueError):
+            return 0.0
+
+    motivos = []
+    nominal, promedio = fraccion(video.get("r_frame_rate")), fraccion(video.get("avg_frame_rate"))
+    if nominal and promedio and abs(nominal - promedio) / nominal > 0.01:
+        motivos.append(f"ritmo de frames variable ({promedio:.2f} fps en promedio, {nominal:.2f} nominal)")
+    if audio is not None and abs(inicio(video) - inicio(audio)) > 0.02:
+        motivos.append(f"el audio y la imagen empiezan con {abs(inicio(video) - inicio(audio)):.2f} s de diferencia")
+    return motivos
+
+
+def normalizar(origen, destino, fps, inicio=None, duracion=None):
+
+    '''
+     Copia de trabajo del video (o de un tramo, cortado por tiempo) a ritmo fijo de "fps", con la imagen y el
+    audio empezando juntos en 0 tal como se ven al reproducir el original: si a la imagen le faltan frames al
+    principio se repite el primero, y si al audio le falta se rellena con silencio. Asi, frame N = segundo N/fps
+    y el audio de esta copia coincide con la imagen. Audio sin perdida (PCM) en Matroska.
+    '''
+
+    comando = ["ffmpeg", "-y", "-loglevel", "error"]
+    if inicio:
+        comando += ["-ss", f"{inicio:.3f}"]
+    comando += ["-i", origen]
+    if duracion:
+        comando += ["-t", f"{duracion:.3f}"]
+    comando += ["-map", "0:v:0", "-vf", f"fps={fps:.6f}:start_time=0",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p", "-bf", "0"]
+    tiene_audio = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+                                  "-of", "csv=p=0", origen], capture_output=True, text=True).stdout.strip()
+    if tiene_audio:
+        comando += ["-map", "0:a:0", "-af", "aresample=async=1:first_pts=0", "-c:a", "pcm_s16le"]
+    comando += ["-f", "matroska", destino]
+    subprocess.run(comando, check=True)
 
 
 def contar_frames(ruta):
@@ -296,7 +369,7 @@ class Trabajo_Video:
 
 def procesar_video(destino, salida, preparar, hilos=2, contenedor="mkv", codec="libx264", calidad=CALIDAD,
                    audio=True, firma=None, reanudar=False, estado=None, progreso=None, cancelado=None,
-                   fragmento=None):
+                   fragmento=None, avisar=print, fps_prueba=None):
 
     '''
      Procesa un video frame por frame con varios hilos y lo guarda comprimido, pudiendo continuar si se corta.
@@ -310,6 +383,8 @@ def procesar_video(destino, salida, preparar, hilos=2, contenedor="mkv", codec="
         fragmento                (inicio, fin) en frames, fin sin incluir: solo se procesa y se guarda ese
                                  pedazo, con su audio. None = el video completo. "numero" en preparar() es
                                  el frame del video original
+        fps_prueba               video de prueba: el tramo se pasa a estos fps (por ejemplo 10) antes de
+                                 procesarlo, con el audio alineado; menos frames = mucho mas rapido
 
      Solo hay en memoria los frames que estan procesando los hilos (unos pocos), no el video entero.
     Devuelve "completo" o "cancelado". Ctrl+C tambien detiene de forma ordenada.
@@ -335,6 +410,14 @@ def procesar_video(destino, salida, preparar, hilos=2, contenedor="mkv", codec="
     trabajo = Trabajo_Video(salida, destino, firma, contenedor, fragmento)
     escritor = None
     detenido = False
+    # Videos con ritmo variable o con audio e imagen que no empiezan juntos: se procesa una copia normalizada
+    # (y su audio), porque si no el resultado queda desfasado (ver problemas_de_tiempo)
+    problemas = problemas_de_tiempo(destino)
+    if fps_prueba:
+        problemas = problemas or ["video de prueba"]
+    fps_lectura = fps  # fps del archivo original: para pasar el fragmento (en frames) a segundos
+    origen_audio = destino
+    lectura = inicio  # frame del archivo que se lee donde empieza lo pedido
 
     try:
         hechos = 0
@@ -349,7 +432,27 @@ def procesar_video(destino, salida, preparar, hilos=2, contenedor="mkv", codec="
                 estado.cargar(trabajo.estado())
         else:
             trabajo.empezar(total, fps)
-        _saltar(captura, inicio + hechos)
+
+        if problemas:
+            normalizado = os.path.join(trabajo.carpeta, "normalizado.mkv")
+            if fps_prueba:
+                fps = float(fps_prueba)  # el video de prueba se escribe a estos fps
+            if not (reanudar and os.path.isfile(normalizado) and contar_frames(normalizado) > 0):
+                if fps_prueba:
+                    avisar(f"Video de prueba: se prepara el tramo a {fps:g} fps...")
+                else:
+                    avisar(f"Video con {' y '.join(problemas)}: se prepara una copia a ritmo fijo para que el "
+                           f"audio no quede desfasado...")
+                normalizar(destino, normalizado, fps, inicio / fps_lectura if fragmento else None,
+                           (fin - inicio) / fps_lectura if fragmento else None)
+            captura.release()
+            captura = cv2.VideoCapture(normalizado)
+            total = contar_frames(normalizado) or total
+            if not reanudar:
+                trabajo.datos["total"] = total
+                trabajo.guardar()
+            origen_audio, lectura = normalizado, 0
+        _saltar(captura, lectura + hechos)
 
         escritor = Escritor_Video(trabajo.nueva_parte(), ancho, alto, fps, contenedor, codec, calidad)
         escritos_parte = 0
@@ -406,8 +509,9 @@ def procesar_video(destino, salida, preparar, hilos=2, contenedor="mkv", codec="
         if siguiente == 0:
             raise ValueError("El video no contiene frames legibles")
 
-        tramo = (inicio / fps, siguiente / fps) if fragmento is not None else None
-        unir(trabajo.rutas_partes(), destino, salida, audio, tramo)
+        # Con la copia normalizada, su audio ya es el del tramo procesado y empieza junto con la imagen
+        tramo = (inicio / fps, siguiente / fps) if fragmento is not None and not problemas else None
+        unir(trabajo.rutas_partes(), origen_audio, salida, audio, tramo)
         trabajo.descartar()
         return "completo"
     finally:

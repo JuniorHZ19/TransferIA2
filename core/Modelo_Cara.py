@@ -1,7 +1,11 @@
 import os
 import math
 import json
+import re
+import shutil
+import time
 import cv2
+from core.Imagenes import leer, guardar
 import numpy as np
 from insightface.app.common import Face
 from core.Identidades import Registro_Identidades
@@ -24,6 +28,18 @@ DET_SIZE_CREACION = 640
 # baja el fps para repartir el maximo en todo el video en lugar de quedarse solo con el principio
 FPS_VIDEO = 1.0
 MAX_FRAMES_VIDEO = 200
+
+# Caras extraidas para revisar antes de crear el modelo: <CARPETA_CARAS>/<nombre>/persona_1, persona_2, ...
+# MARCA_CARAS marca la carpeta como creada por extraer_caras: solo esas se pueden reemplazar
+CARPETA_CARAS = os.path.join("src", "caras_extraidas")
+MARCA_CARAS = ".transferia_caras"
+EN_PROCESO = "_en_proceso"  # las caras se guardan aqui apenas se detectan; al terminar pasan a persona_N
+# Windows no acepta rutas de mas de 260 caracteres (salvo con las rutas largas activadas) y los nombres de los
+# videos bajados de internet suelen ser muy largos: los nombres sugeridos y el del video dentro del nombre de
+# cada cara se acortan
+LARGO_NOMBRE = 40
+LARGO_VIDEO_EN_CARA = 30
+LADO_RECORTE = 384
 
 
 class Modelo_Cara:
@@ -52,6 +68,15 @@ class Modelo_Cara:
             elif ruta.lower().endswith(EXTENSIONES_IMAGEN):
                 imagenes.append(ruta)
         return imagenes
+
+
+    @staticmethod
+    def nombre_seguro(texto, maximo=LARGO_NOMBRE):
+
+        '''Nombre para un archivo o carpeta: solo letras, numeros, espacios, - y _, y como mucho "maximo"
+           caracteres (ver LARGO_NOMBRE)'''
+
+        return "".join(c for c in texto if c.isalnum() or c in "-_ ").strip()[:maximo].strip()
 
 
     @staticmethod
@@ -131,46 +156,8 @@ class Modelo_Cara:
         Devuelve el diccionario de datos guardado en el .json.
         '''
 
-        imagenes = Modelo_Cara.rutas_imagenes(rutas)
-        videos = [r for r in rutas if os.path.isfile(r) and Modelo_Cara.es_video(r)]
-        if not imagenes and not videos:
-            raise ValueError("No se encontro ninguna imagen (.jpg, .png, .bmp, .webp) ni video (.mp4, .avi, .mkv, .mov, .webm)")
-
         registro = Registro_Identidades(max_ids=1)
-        # (cara, miniatura, origen, nombre del video o None). Se guarda la miniatura y no la imagen entera:
-        # con cientos de frames de video la memoria se iria a varios GB
-        caras = []
-
-        def agregar(imagen, origen, video=None):
-            encontradas = [c for c in analizador.obtener_caras(imagen) if registro.calidad_cara(c) > 0]
-            caras.extend((c, Modelo_Cara._miniatura(imagen, c), origen, video) for c in encontradas)
-            return len(encontradas)
-
-        analizador.preparar_modelo(dimension=DET_SIZE_CREACION)
-        try:
-            for i, ruta in enumerate(imagenes, 1):
-                imagen = cv2.imread(ruta)
-                if imagen is None:
-                    progreso(f"Foto {i}/{len(imagenes)}: no se pudo leer, omitida")
-                    continue
-                progreso(f"Foto {i}/{len(imagenes)}: {agregar(imagen, os.path.basename(ruta))} cara(s) util(es)")
-
-            for ruta in videos:
-                nombre = os.path.basename(ruta)
-                _, _, duracion = Modelo_Cara.info_video(ruta)
-                total = Modelo_Cara.frames_a_extraer(duracion, fps_video, max_frames)
-                efectivo = Modelo_Cara.fps_efectivo(duracion, fps_video, max_frames)
-                if efectivo < fps_video:
-                    progreso(f"{nombre}: dura {duracion:.0f} s; para no pasar de {max_frames} frames se usa "
-                             f"{efectivo:.2f} fps en lugar de {fps_video:g}")
-                for j, (imagen, segundo) in enumerate(Modelo_Cara.frames_video(ruta, fps_video, max_frames), 1):
-                    encontradas = agregar(imagen, f"{nombre} {segundo:.1f}s", nombre)
-                    progreso(f"{nombre}: frame {j}/~{total} ({segundo:.1f} s): {encontradas} cara(s) util(es)")
-        finally:
-            analizador.preparar_modelo()
-
-        if not caras:
-            raise ValueError("No se detecto ninguna cara util (nitida, de frente y de buen tamaño)")
+        caras = Modelo_Cara._recolectar(rutas, analizador, progreso, fps_video, max_frames, Modelo_Cara._miniatura)
 
         # Referencia = la cara que mas se parece a todas las demas; asi un intruso no arrastra el promedio
         vectores = np.array([c.normed_embedding for c, _, _, _ in caras], dtype=np.float32)
@@ -202,7 +189,7 @@ class Modelo_Cara:
         base, _ = os.path.splitext(salida)
         os.makedirs(os.path.dirname(os.path.abspath(base)), exist_ok=True)
         np.save(base + ".npy", promedio.astype(np.float32))
-        cv2.imwrite(base + ".jpg", miniatura)
+        guardar(base + ".jpg", miniatura)
 
         datos = {
             "nombre": os.path.basename(base),
@@ -223,6 +210,171 @@ class Modelo_Cara:
             json.dump(datos, archivo, ensure_ascii=False, indent=2)
 
         return datos
+
+
+    @staticmethod
+    def _recolectar(rutas, analizador, progreso, fps_video, max_frames, recortar):
+
+        '''
+         Caras utiles (nitidas, de frente y de buen tamaño) de las fotos y de los frames de los videos.
+        Devuelve [(cara, recortar(imagen, cara), origen, nombre del video o None)]; "origen" identifica la foto
+        o el frame ("video.mp4 12.5s"): dos caras con el mismo origen salieron de la misma imagen.
+        '''
+
+        imagenes = Modelo_Cara.rutas_imagenes(rutas)
+        videos = [r for r in rutas if os.path.isfile(r) and Modelo_Cara.es_video(r)]
+        if not imagenes and not videos:
+            raise ValueError("No se encontro ninguna imagen (.jpg, .png, .bmp, .webp) ni video (.mp4, .avi, .mkv, .mov, .webm)")
+
+        registro = Registro_Identidades(max_ids=1)
+        # (cara, recorte, origen, nombre del video o None). Se guarda el recorte y no la imagen entera:
+        # con cientos de frames de video la memoria se iria a varios GB
+        caras = []
+
+        def agregar(imagen, origen, video=None):
+            encontradas = [c for c in analizador.obtener_caras(imagen) if registro.calidad_cara(c) > 0]
+            caras.extend((c, recortar(imagen, c), origen, video) for c in encontradas)
+            return len(encontradas)
+
+        analizador.preparar_modelo(dimension=DET_SIZE_CREACION)
+        try:
+            for i, ruta in enumerate(imagenes, 1):
+                imagen = leer(ruta)
+                if imagen is None:
+                    progreso(f"Foto {i}/{len(imagenes)}: no se pudo leer, omitida")
+                    continue
+                progreso(f"Foto {i}/{len(imagenes)}: {agregar(imagen, os.path.basename(ruta))} cara(s) util(es)")
+
+            for ruta in videos:
+                nombre = os.path.basename(ruta)
+                _, _, duracion = Modelo_Cara.info_video(ruta)
+                total = Modelo_Cara.frames_a_extraer(duracion, fps_video, max_frames)
+                efectivo = Modelo_Cara.fps_efectivo(duracion, fps_video, max_frames)
+                if efectivo < fps_video:
+                    progreso(f"{nombre}: dura {duracion:.0f} s; para no pasar de {max_frames} frames se usa "
+                             f"{efectivo:.2f} fps en lugar de {fps_video:g}")
+                for j, (imagen, segundo) in enumerate(Modelo_Cara.frames_video(ruta, fps_video, max_frames), 1):
+                    encontradas = agregar(imagen, f"{nombre} {segundo:.1f}s", nombre)
+                    progreso(f"{nombre}: frame {j}/~{total} ({segundo:.1f} s): {encontradas} cara(s) util(es)")
+        finally:
+            analizador.preparar_modelo()
+
+        if not caras:
+            raise ValueError("No se detecto ninguna cara util (nitida, de frente y de buen tamaño)")
+        return caras
+
+
+    @staticmethod
+    def extraer_caras(rutas, analizador, carpeta, progreso=print, fps_video=FPS_VIDEO, max_frames=MAX_FRAMES_VIDEO,
+                      reemplazar=False, al_empezar=None):
+
+        '''
+         Saca las caras de los videos (y fotos) y las guarda en "carpeta" para revisarlas antes de crear el
+        modelo: una subcarpeta por persona (persona_1 = la que mas aparece) con las caras ordenadas de mejor a
+        peor (001_... es la mas nitida, de frente y grande). Se borran las malas y despues se crea el modelo con
+        la carpeta de la persona (crear con [carpeta/persona_1]).
+         Mientras se extraen, cada cara se guarda apenas aparece en carpeta/_en_proceso (asi se ve el avance);
+        al terminar se mueven a persona_N. al_empezar(ruta de _en_proceso) se llama al crearla.
+         Una carpeta que ya tiene archivos solo se reemplaza si la creo esta funcion (tiene MARCA_CARAS) y
+        reemplazar=True; en ese caso se borran solo sus subcarpetas persona_N y _en_proceso.
+        Devuelve {"carpeta", "caras", "personas": [{"carpeta", "caras"}]}.
+        '''
+
+        carpeta = os.path.abspath(carpeta)
+        marca = os.path.join(carpeta, MARCA_CARAS)
+        if os.path.isdir(carpeta) and os.listdir(carpeta):
+            if not os.path.exists(marca):
+                raise FileExistsError(f"La carpeta ya tiene archivos y no es de caras extraidas; elige otra: {carpeta}")
+            if not reemplazar:
+                raise FileExistsError(f"Ya hay caras extraidas en {carpeta}; reemplazalas o elige otro nombre")
+            for nombre in os.listdir(carpeta):
+                if (nombre.startswith("persona_") or nombre == EN_PROCESO) and os.path.isdir(os.path.join(carpeta, nombre)):
+                    shutil.rmtree(os.path.join(carpeta, nombre))
+
+        en_proceso = os.path.join(carpeta, EN_PROCESO)
+        os.makedirs(en_proceso)
+        with open(marca, "w", encoding="utf-8") as archivo:  # desde ya: si se corta, la carpeta se puede reemplazar
+            json.dump({"origen": [os.path.basename(r) for r in rutas], "fps_video": fps_video}, archivo,
+                      ensure_ascii=False)
+        progreso(f"Las caras se van guardando en {en_proceso}")
+        if al_empezar is not None:
+            al_empezar(en_proceso)
+
+        guardadas = [0]
+
+        def guardar_al_momento(imagen, cara):
+            '''Guarda el recorte apenas se detecta la cara y devuelve su ruta (no se guarda la imagen en memoria)'''
+            guardadas[0] += 1
+            ruta = os.path.join(en_proceso, f"{guardadas[0]:04d}.jpg")
+            if not guardar(ruta, Modelo_Cara._recorte_revision(imagen, cara), [cv2.IMWRITE_JPEG_QUALITY, 95]):
+                raise RuntimeError(f"No se pudo guardar la cara en {ruta} (¿disco lleno o sin permiso?)")
+            return ruta
+
+        caras = Modelo_Cara._recolectar(rutas, analizador, progreso, fps_video, max_frames, guardar_al_momento)
+        calidad = Registro_Identidades(max_ids=1).calidad_cara
+
+        # Agrupar por persona empezando por las mejores caras (asi cada grupo arranca con una buena referencia).
+        # Dos caras de la misma imagen son dos personas distintas
+        grupos = []  # {"suma", "origenes", "indices"}
+        for i in sorted(range(len(caras)), key=lambda i: -calidad(caras[i][0])):
+            emb = caras[i][0].normed_embedding
+            candidatos = [(float(emb @ g["suma"]) / float(np.linalg.norm(g["suma"])), g) for g in grupos
+                          if caras[i][2] not in g["origenes"]]
+            similitud, grupo = max(candidatos, key=lambda c: c[0], default=(-1.0, None))
+            if similitud < UMBRAL_MISMA_PERSONA:
+                grupo = {"suma": np.zeros(DIMENSION), "origenes": set(), "indices": []}
+                grupos.append(grupo)
+            grupo["suma"] += emb
+            grupo["origenes"].add(caras[i][2])
+            grupo["indices"].append(i)
+        grupos.sort(key=lambda g: -len(g["indices"]))
+
+        # Mover cada cara de _en_proceso a su persona, con el nombre que dice su orden y de donde salio
+        personas = []
+        for k, grupo in enumerate(grupos, 1):
+            destino = os.path.join(carpeta, f"persona_{k}")
+            os.makedirs(destino)
+            for n, i in enumerate(grupo["indices"], 1):
+                cara, ruta, origen, video = caras[i]
+                if video is not None:  # "video.mp4 12.5s" -> "video_12.5s"
+                    origen = os.path.splitext(video)[0][:LARGO_VIDEO_EN_CARA].strip() + "_" + origen[len(video) + 1:]
+                else:
+                    origen = os.path.splitext(origen)[0]
+                origen = re.sub(r"[^\w.-]+", "_", origen)
+                Modelo_Cara._mover(ruta, os.path.join(destino, f"{n:03d}_{origen}.jpg"))
+            personas.append({"carpeta": destino, "caras": len(grupo["indices"])})
+            progreso(f"persona_{k}: {len(grupo['indices'])} cara(s)")
+        shutil.rmtree(en_proceso, ignore_errors=True)
+        return {"carpeta": carpeta, "caras": len(caras), "personas": personas}
+
+
+    @staticmethod
+    def _mover(origen, destino):
+
+        '''Mueve el archivo; si Windows lo tiene ocupado un momento (el explorador abierto en _en_proceso
+           generando miniaturas), reintenta y al final lo copia'''
+
+        for _ in range(10):
+            try:
+                os.replace(origen, destino)
+                return
+            except PermissionError:
+                time.sleep(0.1)
+        shutil.copyfile(origen, destino)
+
+
+    @staticmethod
+    def _recorte_revision(imagen, cara, lado=LADO_RECORTE):
+
+        '''Recorte cuadrado con la cara al centro (ocupa la mitad del lado) para revisarla y crear el modelo
+           despues; lo que cae fuera de la imagen se rellena con el borde, asi la cara no se deforma'''
+
+        x1, y1, x2, y2 = cara.bbox
+        escala = lado / (2.0 * max(x2 - x1, y2 - y1))
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        M = np.float32([[escala, 0, lado / 2 - cx * escala], [0, escala, lado / 2 - cy * escala]])
+        return cv2.warpAffine(imagen, M, (lado, lado), flags=cv2.INTER_AREA if escala < 1 else cv2.INTER_CUBIC,
+                              borderMode=cv2.BORDER_REPLICATE)
 
 
     @staticmethod
@@ -269,7 +421,7 @@ class Modelo_Cara:
         for i in np.argsort(-pesos):
             miniatura = Modelo_Cara.miniatura(rutas[i])
             if miniatura is not None:
-                cv2.imwrite(base + ".jpg", miniatura)
+                guardar(base + ".jpg", miniatura)
                 break
 
         datos = {
@@ -353,7 +505,7 @@ class Modelo_Cara:
         '''Imagen de la miniatura que acompaña al .npy, o None'''
 
         ruta_jpg = os.path.splitext(ruta)[0] + ".jpg"
-        return cv2.imread(ruta_jpg) if os.path.isfile(ruta_jpg) else None
+        return leer(ruta_jpg) if os.path.isfile(ruta_jpg) else None
 
 
     @staticmethod

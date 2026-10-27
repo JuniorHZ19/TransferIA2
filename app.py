@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import cv2
+from core.Imagenes import leer, guardar
 import os
 import numpy as np
 from PIL import Image, ImageTk
@@ -9,8 +10,9 @@ import time
 import subprocess
 import sys
 from core.Face_Swaper import Swapper_Faces
+from core.Face_Analyzer import Analyzer_Faces
 from core.Identidades import Registro_Identidades
-from core.Modelo_Cara import Modelo_Cara, CARPETA_MODELOS, FPS_VIDEO, MAX_FRAMES_VIDEO
+from core.Modelo_Cara import Modelo_Cara, CARPETA_MODELOS, FPS_VIDEO, MAX_FRAMES_VIDEO, CARPETA_CARAS, MARCA_CARAS
 from core.Proceso_Carpeta import imagenes_carpeta, carpeta_salida, procesar_carpeta
 from core import Configuraciones
 from core.Empaquetar import empaquetar, ruta_zip, disponible as zip_disponible
@@ -18,7 +20,8 @@ from core.Personas import (Personas, validar_fps, validar_maximo, FPS as PERSONA
                            MAX_FRAMES_RANGO as PERSONAS_MAX_RANGO)
 import tkinterdnd2 as tkdnd
 import shutil
-from core.Proceso_Video import procesar_video, Trabajo_Video, CONTENEDORES, CODECS, info_video
+from core.Proceso_Video import (procesar_video, Trabajo_Video, CONTENEDORES, CODECS, info_video, FPS_PRUEBA,
+                                SEGUNDOS_PRUEBA)
 from core.Mejorador import validar_minimo, MINIMO_POR_DEFECTO
 
 
@@ -186,12 +189,14 @@ class PreviewWindow(tk.Toplevel):
     COLOR_MASCARA = (60, 220, 60)
     OPACIDAD_MASCARA = 0.45
 
-    def __init__(self, parent, app, video_path=None, image=None):
+    def __init__(self, parent, app, video_path=None, image=None, imagenes=None):
         super().__init__(parent)
         self.title("Preview - Transfer")
         self.geometry("1400x800")
         self.app = app
         self.video_path = video_path  # con video, el modo identidad usa el analisis previo de personas
+        self.imagenes = imagenes or []  # destino carpeta: la barra pasa de una imagen a otra
+        self._indice_mostrado = None
 
         # Ultimo frame mostrado: original y resultado (sin escalar), para cambiar de vista o de tamaño
         # sin volver a procesar
@@ -292,8 +297,36 @@ class PreviewWindow(tk.Toplevel):
             self.frame_slider.bind("<ButtonRelease-1>", self.on_slider_release)
             
             self.update_frame()
+        elif self.imagenes:
+            # Carpeta de imagenes: la misma barra que con video, pero cada posicion es una imagen
+            self.primer_frame, self.ultimo_frame = 0, len(self.imagenes) - 1
+            controls = ttk.Frame(main_frame)
+            controls.pack(fill=tk.X, pady=(10, 0))
+            ttk.Button(controls, text="< Anterior", command=lambda: self.mover_imagen(-1)).pack(side=tk.LEFT)
+            ttk.Button(controls, text="Siguiente >", command=lambda: self.mover_imagen(1)).pack(side=tk.LEFT, padx=(2, 0))
+            self.frame_label = ttk.Label(controls, text="")
+            self.frame_label.pack(side=tk.RIGHT, padx=10)
+            slider_frame = ttk.Frame(controls)
+            slider_frame.pack(fill=tk.X, padx=10, expand=True)
+            self.frame_slider = ttk.Scale(slider_frame, from_=0, to=max(1, self.ultimo_frame), orient=tk.HORIZONTAL)
+            self.frame_slider.set(0)
+            self.frame_slider.pack(fill=tk.X, expand=True)
+            if self.ultimo_frame == 0:
+                self.frame_slider.state(["disabled"])
+            self.frame_slider.bind("<Button-1>", self.on_slider_click)
+            self.frame_slider.bind("<B1-Motion>", self.on_slider_drag)
+            self.frame_slider.bind("<ButtonRelease-1>", self.on_slider_release)
+            self.bind("<Left>", lambda e: self.mover_imagen(-1))
+            self.bind("<Right>", lambda e: self.mover_imagen(1))
+            self.focus_set()  # las flechas del teclado funcionan sin tener que hacer clic antes
+            self.update_frame()
         elif image is not None:
             self.show_image(image)
+
+    def mover_imagen(self, paso):
+        indice = min(self.ultimo_frame, max(0, int(round(self.frame_slider.get())) + paso))
+        self.frame_slider.set(indice)
+        self.update_frame()
             
     def on_resize(self, event):
         # Reajustar una sola vez cuando la ventana deja de cambiar de tamaño
@@ -476,6 +509,18 @@ class PreviewWindow(tk.Toplevel):
         self.update_frame()
 
     def update_frame(self, *args):
+        if self.imagenes:
+            indice = min(self.ultimo_frame, max(0, int(round(self.frame_slider.get()))))
+            if indice == self._indice_mostrado:  # arrastrar dentro de la misma imagen no la vuelve a procesar
+                return
+            ruta = self.imagenes[indice]
+            imagen = leer(ruta)
+            self.frame_label.config(text=f"{indice + 1}/{len(self.imagenes)}  ·  {os.path.basename(ruta)}"
+                                    + ("  (no se pudo leer)" if imagen is None else ""))
+            self._indice_mostrado = indice
+            if imagen is not None:
+                self.show_image(imagen)
+            return
         if hasattr(self, 'cap'):
             frame_no = int(self.frame_slider.get())
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
@@ -961,6 +1006,12 @@ class FaceSwapApp:
         self.genero_var = tk.StringVar(value="todos")
         ttk.Combobox(caras_fila, textvariable=self.genero_var, values=["todos", "mujer", "hombre"],
                      state="readonly", width=8).pack(side=tk.LEFT)
+        # Deteccion de caras inclinadas o boca abajo (giros y refinado); sin ella, la deteccion original
+        self.caras_inclinadas_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(caras_fila, text="Caras inclinadas", variable=self.caras_inclinadas_var).pack(side=tk.LEFT,
+                                                                                                    padx=(15, 0))
+        self.caras_inclinadas_var.trace_add("write", lambda *_: setattr(
+            Analyzer_Faces, "CARAS_INCLINADAS", self.caras_inclinadas_var.get()))
         # Analisis previo de personas (solo con identidad en video): cuantos frames por segundo y como maximo
         self.analisis_label = ttk.Label(caras_fila, text="Análisis de personas:")
         self.analisis_label.pack(side=tk.LEFT, padx=(20, 5))
@@ -1143,6 +1194,18 @@ class FaceSwapApp:
         self.fragmento_label = ttk.Label(fragmento_frame, text="(video completo)", foreground="gray")
         self.fragmento_label.pack(side=tk.LEFT, padx=5)
 
+        # Prueba rapida: el fragmento (o los primeros segundos) a pocos fps, con las opciones actuales
+        prueba_frame = ttk.Frame(process_frame)
+        prueba_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
+        ModernButton(prueba_frame, text="Video de prueba", command=self.probar_video).pack(side=tk.LEFT, padx=5)
+        ttk.Label(prueba_frame, text="a").pack(side=tk.LEFT, padx=(5, 3))
+        self.prueba_fps_var = tk.StringVar(value=f"{FPS_PRUEBA:g}")
+        ttk.Spinbox(prueba_frame, textvariable=self.prueba_fps_var, values=("5", "8", "10", "12", "15"),
+                    width=4).pack(side=tk.LEFT)
+        ttk.Label(prueba_frame, text=f"fps (el fragmento elegido, o los primeros {SEGUNDOS_PRUEBA} s)",
+                  foreground="gray").pack(side=tk.LEFT, padx=5)
+        self.prueba_fps = None  # fps mientras se procesa un video de prueba; None = proceso normal
+
         # Botones de proceso
         botones_proceso = ttk.Frame(derecha)
         botones_proceso.pack(pady=10)
@@ -1228,6 +1291,7 @@ class FaceSwapApp:
         return {
             "asignacion": self.asignacion_var.get(),
             "genero": self.genero_var.get(),
+            "caras_inclinadas": self.caras_inclinadas_var.get(),
             "personas_fps": numero(self.personas_fps_var.get(), float),
             "personas_max": numero(self.personas_max_var.get(), int),
             "indices_fuente": self.src_indices_var.get(),
@@ -1266,6 +1330,7 @@ class FaceSwapApp:
             "fuerza_mejora": self.fuerza_gpen_var, "contenedor": self.contenedor_var, "codec": self.codec_var,
             "carpeta_salida": self.output_path_var, "nombre_archivo": self.output_filename_var,
             "zip": self.zip_var, "zip_conservar": self.zip_conservar_var,
+            "caras_inclinadas": self.caras_inclinadas_var,
         }
         for clave, variable in variables.items():
             if clave in ajustes:
@@ -1577,7 +1642,7 @@ class FaceSwapApp:
                 self.set_modelos(elegidos)
                 return
 
-            nombre = "".join(c for c in nombre_var.get().strip() if c.isalnum() or c in "-_ ").strip()
+            nombre = Modelo_Cara.nombre_seguro(nombre_var.get())
             if not nombre:
                 messagebox.showwarning("Modelos de cara", "Escribe un nombre (letras, números, guiones o espacios)",
                                        parent=ventana)
@@ -1628,7 +1693,7 @@ class FaceSwapApp:
         if self.modelos_src:
             caras = [Modelo_Cara.cargar(r) for r in self.modelos_src]
         else:
-            source_img = cv2.imread(self.source_path)
+            source_img = leer(self.source_path)
             if source_img is None:
                 raise Exception("No se pudo leer la imagen fuente")
             caras = self.swapper.detectar_caras(source_img)
@@ -1695,7 +1760,7 @@ class FaceSwapApp:
         ventana.resizable(False, False)
 
         ttk.Label(ventana, text="El video debe mostrar a UNA persona (si aparece otra, se usa la que más se repite).\n"
-                                "Los frames se sacan en memoria; no se guardan imágenes en disco."
+                                "Los frames se sacan en memoria; solo se guardan imágenes si eliges revisar las caras."
                   ).pack(padx=15, pady=(10, 5), anchor="w")
         for ruta, (fps_original, total, duracion) in zip(videos, info):
             ttk.Label(ventana, text=f"• {os.path.basename(ruta)}: {duracion:.1f} s, {fps_original:.0f} fps ({total} frames)"
@@ -1708,9 +1773,15 @@ class FaceSwapApp:
         ttk.Spinbox(opciones, textvariable=fps_var, width=6,
                     values=("0.25", "0.5", "1", "2", "3", "5", "10")).grid(row=0, column=1, sticky="w", padx=5)
         ttk.Label(opciones, text="Nombre del modelo:").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        sugerido = "".join(c for c in os.path.splitext(os.path.basename(videos[0]))[0] if c.isalnum() or c in "-_ ").strip()
+        sugerido = Modelo_Cara.nombre_seguro(os.path.splitext(os.path.basename(videos[0]))[0])
         nombre_var = tk.StringVar(value=sugerido)
         ttk.Entry(opciones, textvariable=nombre_var, width=25).grid(row=1, column=1, sticky="w", padx=5, pady=(8, 0))
+        revisar_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(opciones, text="Revisar las caras antes de crear el modelo", variable=revisar_var
+                        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(opciones, text="Guarda las caras por persona (de mejor a peor) para que borres las malas;\n"
+                                 "luego se crea el modelo con las que quedan.", foreground="gray"
+                  ).grid(row=3, column=0, columnspan=2, sticky="w")
 
         estimado_label = ttk.Label(ventana, justify=tk.LEFT)
         estimado_label.pack(padx=15, pady=(10, 0), anchor="w")
@@ -1744,7 +1815,7 @@ class FaceSwapApp:
                 messagebox.showwarning("Modelo de cara", "Los frames por segundo deben ser un número entre 0 y 60",
                                        parent=ventana)
                 return
-            nombre = "".join(c for c in nombre_var.get().strip() if c.isalnum() or c in "-_ ").strip()
+            nombre = Modelo_Cara.nombre_seguro(nombre_var.get())
             if not nombre:
                 messagebox.showwarning("Modelo de cara", "Escribe un nombre (letras, números, guiones o espacios)",
                                        parent=ventana)
@@ -1753,12 +1824,32 @@ class FaceSwapApp:
             if os.path.exists(salida) and not messagebox.askyesno("Modelo de cara", f"Ya existe «{nombre}». ¿Reemplazarlo?",
                                                                   parent=ventana):
                 return
+            if revisar_var.get():
+                carpeta = os.path.join(CARPETA_CARAS, nombre)
+                reemplazar = False
+                if os.path.isdir(carpeta) and os.listdir(carpeta):
+                    if not os.path.exists(os.path.join(carpeta, MARCA_CARAS)):
+                        messagebox.showerror("Modelo de cara", f"{carpeta} ya tiene otros archivos; usa otro nombre",
+                                             parent=ventana)
+                        return
+                    if not messagebox.askyesno("Modelo de cara", f"Ya hay caras extraídas de «{nombre}». "
+                                               "¿Reemplazarlas?", parent=ventana):
+                        return
+                    reemplazar = True
+                ventana.destroy()
+                self._lanzar_extraccion(videos, carpeta, salida, fps, reemplazar)
+                return
             ventana.destroy()
             self._lanzar_creacion(videos, salida, fps_video=fps)
 
+        def texto_boton(*_):
+            boton_aceptar.config(text="Extraer caras" if revisar_var.get() else "Crear modelo")
+
         botones = ttk.Frame(ventana)
         botones.pack(pady=10)
-        ttk.Button(botones, text="Crear modelo", command=aceptar).pack(side=tk.LEFT, padx=5)
+        boton_aceptar = ttk.Button(botones, text="Crear modelo", command=aceptar)
+        boton_aceptar.pack(side=tk.LEFT, padx=5)
+        revisar_var.trace_add("write", texto_boton)
         ttk.Button(botones, text="Cancelar", command=ventana.destroy).pack(side=tk.LEFT, padx=5)
 
     def _lanzar_creacion(self, rutas, salida, **opciones):
@@ -1782,6 +1873,109 @@ class FaceSwapApp:
                 self.root.after(0, lambda: self.process_button.state(['!disabled']))
 
         threading.Thread(target=tarea, daemon=True).start()
+
+    def _lanzar_extraccion(self, videos, carpeta, salida, fps, reemplazar):
+        """Extrae las caras a carpeta/persona_N en segundo plano y abre la ventana para revisarlas"""
+        self.processing = True
+        self.process_button.state(['disabled'])
+
+        def estado(texto):
+            print(texto)
+            self.root.after(0, lambda: self.status_label.config(text=texto))
+
+        def tarea():
+            try:
+                # La carpeta _en_proceso se abre al empezar: las caras van apareciendo a medida que se detectan
+                datos = Modelo_Cara.extraer_caras(
+                    videos, self.swapper.get_Analizador(), carpeta, progreso=estado, fps_video=fps,
+                    reemplazar=reemplazar, al_empezar=lambda ruta: self.root.after(0, lambda: self._abrir_carpeta(ruta)))
+                self.root.after(0, lambda: self._revisar_caras(datos, salida))
+            except Exception as e:
+                error = str(e)
+                self.root.after(0, lambda: messagebox.showerror("Modelo de cara", error))
+            finally:
+                self.processing = False
+                self.root.after(0, lambda: self.process_button.state(['!disabled']))
+
+        threading.Thread(target=tarea, daemon=True).start()
+
+    @staticmethod
+    def _abrir_carpeta(carpeta):
+        try:
+            os.startfile(carpeta)
+        except (AttributeError, OSError):  # os.startfile solo existe en Windows
+            subprocess.Popen(["xdg-open", carpeta])
+
+    def _revisar_caras(self, datos, salida):
+        """Ventana (no bloquea) para elegir la persona, abrir su carpeta, borrar las caras malas en el explorador
+        y crear el modelo con las que quedan"""
+        personas = datos["personas"]
+        self.status_label.config(text=f"{datos['caras']} cara(s) extraídas en {datos['carpeta']}")
+        ventana = tk.Toplevel(self.root)
+        ventana.title("Revisar caras extraídas")
+        ventana.transient(self.root)
+        ventana.resizable(False, False)
+
+        ttk.Label(ventana, justify=tk.LEFT,
+                  text="1. Elige la persona y abre su carpeta.\n"
+                       "2. Borra las caras malas: borrosas, tapadas, con gestos raros o de otra persona\n"
+                       "    (están ordenadas de mejor a peor: las malas suelen estar al final).\n"
+                       "3. Pulsa «Crear modelo» con las caras que quedaron."
+                  ).pack(padx=15, pady=(10, 5), anchor="w")
+
+        persona_var = tk.IntVar(value=0)
+        lista = ttk.Frame(ventana)
+        lista.pack(padx=15, pady=5, anchor="w")
+        ventana.fotos = []
+        for k, persona in enumerate(personas[:8]):
+            fila = ttk.Frame(lista)
+            fila.pack(anchor="w", pady=2)
+            imagenes = Modelo_Cara.rutas_imagenes([persona["carpeta"]])
+            if imagenes:
+                mini = leer(imagenes[0])
+                if mini is not None:
+                    foto = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(cv2.resize(mini, (64, 64)), cv2.COLOR_BGR2RGB)))
+                    ventana.fotos.append(foto)
+                    ttk.Label(fila, image=foto).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Radiobutton(fila, variable=persona_var, value=k,
+                            text=f"{os.path.basename(persona['carpeta'])}: {persona['caras']} cara(s)"
+                            ).pack(side=tk.LEFT)
+        if len(personas) > 8:
+            ttk.Label(ventana, text=f"(y {len(personas) - 8} persona(s) más con pocas caras en {datos['carpeta']})",
+                      foreground="gray").pack(padx=15, anchor="w")
+
+        def carpeta_elegida():
+            return personas[persona_var.get()]["carpeta"]
+
+        def crear():
+            if not os.path.isdir(carpeta_elegida()):
+                messagebox.showerror("Modelo de cara", f"Ya no existe {carpeta_elegida()}", parent=ventana)
+                return
+            imagenes = Modelo_Cara.rutas_imagenes([carpeta_elegida()])
+            if not imagenes:
+                messagebox.showwarning("Modelo de cara", "La carpeta quedó sin caras", parent=ventana)
+                return
+            if self.processing:
+                messagebox.showwarning("Aviso", "Espera a que termine el procesamiento actual", parent=ventana)
+                return
+            nombre = os.path.splitext(os.path.basename(salida))[0]
+            if not messagebox.askyesno("Modelo de cara", f"¿Crear el modelo «{nombre}» con {len(imagenes)} cara(s) de "
+                                       f"{os.path.basename(carpeta_elegida())}?", parent=ventana):
+                return
+            ventana.destroy()
+            self._lanzar_creacion(imagenes, salida)
+
+        botones = ttk.Frame(ventana)
+        botones.pack(pady=10)
+        ttk.Button(botones, text="Abrir carpeta", command=lambda: self._abrir_carpeta(carpeta_elegida())
+                   ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(botones, text="Crear modelo", command=crear).pack(side=tk.LEFT, padx=5)
+        ttk.Button(botones, text="Cerrar", command=ventana.destroy).pack(side=tk.LEFT, padx=5)
+        ttk.Label(ventana, text="Si cierras, las caras quedan guardadas: puedes crear el modelo después soltando\n"
+                                "la carpeta de la persona en la zona de fuente.", foreground="gray", justify=tk.LEFT
+                  ).pack(padx=15, pady=(0, 10), anchor="w")
+        if personas:
+            self._abrir_carpeta(personas[0]["carpeta"])
 
     def _modelo_creado(self, salida, datos):
         self.set_modelos([salida])
@@ -1862,7 +2056,7 @@ class FaceSwapApp:
                 if not ret:
                     raise Exception("No se pudo leer el video")
             else:
-                img = cv2.imread(path)
+                img = leer(path)
                 if img is None:
                     raise Exception("No se pudo leer la imagen")
             
@@ -1900,6 +2094,7 @@ class FaceSwapApp:
         for var in (self.src_indices_var, self.dst_indices_var, self.asignacion_var, self.genero_var,
                     self.mascara_var, self.color_var, self.var_ojos, self.var_boca, self.var_nariz, self.var_frente,
                     self.maquillaje_var, self.var_oclucion, self.oclusion_modo_var, self.var_mejorar,
+                    self.caras_inclinadas_var,
                     self.fuerza_gpen_var,
                     self.gpen_minimo_var, self.gpen_unidad_var):
             var.trace_add("write", self.config_cambiada)
@@ -2105,10 +2300,46 @@ class FaceSwapApp:
                                          "Las imágenes con el mismo nombre se reemplazan. ¿Continuar?")):
                 return
 
+        self.prueba_fps = None
         self.process_button.state(['disabled'])
         self.processing = True
         self.opciones_proceso = self.opciones_cambio()
         self.fragmento_proceso = self.fragmento_activo()
+        threading.Thread(target=self.process_files, daemon=True).start()
+
+    def probar_video(self):
+        """Video de prueba: el fragmento elegido (o los primeros SEGUNDOS_PRUEBA s) a pocos fps, con las opciones
+        actuales y el audio sincronizado. Se guarda como <nombre>_prueba.mp4; el resultado final no se toca"""
+        if self.processing:
+            return
+        if not self.source_path or not self.es_video(self.target_path):
+            messagebox.showinfo("Video de prueba", "Elige una fuente y un video destino")
+            return
+        try:
+            fps = float(self.prueba_fps_var.get().replace(",", "."))
+            if not 1 <= fps <= 30:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("Video de prueba", "Los fps de la prueba deben ser un número de 1 a 30")
+            return
+        try:
+            self.validar_indices_fuente(self.obtener_caras_src())
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            return
+        fragmento = self.fragmento_activo()
+        if fragmento is None:
+            datos = info_video(self.target_path)
+            if datos is None:
+                messagebox.showerror("Video de prueba", "No se pudo abrir el video")
+                return
+            fragmento = (0, min(datos["frames"], int(round(SEGUNDOS_PRUEBA * datos["fps"]))))
+        self.prueba_fps = fps
+        self.reanudar_video = False
+        self.process_button.state(['disabled'])
+        self.processing = True
+        self.opciones_proceso = self.opciones_cambio()
+        self.fragmento_proceso = fragmento
         threading.Thread(target=self.process_files, daemon=True).start()
 
     @staticmethod
@@ -2116,7 +2347,8 @@ class FaceSwapApp:
         return bool(ruta) and ruta.lower().endswith(('.mp4', '.avi', '.mkv', '.mov'))
 
     def ruta_salida_video(self):
-        return os.path.abspath(os.path.join(self.output_path_var.get(), f"{self.output_filename_var.get()}.mp4"))
+        sufijo = "_prueba" if self.prueba_fps else ""
+        return os.path.abspath(os.path.join(self.output_path_var.get(), f"{self.output_filename_var.get()}{sufijo}.mp4"))
 
     def firma_video(self):
         """Opciones que definen el resultado: si cambian, un video cortado no se puede continuar"""
@@ -2139,6 +2371,9 @@ class FaceSwapApp:
             "codec": self.codec_var.get(),
             # solo si esta marcada: los videos empezados antes de esta opcion se siguen pudiendo continuar
             **({"frente": True} if self.var_frente.get() else {}),
+            # deteccion de caras inclinadas sin saltos (mezcla gradual entre 10 y 20 grados): otros puntos
+            "deteccion": 2,
+            **({"sin_inclinadas": True} if not self.caras_inclinadas_var.get() else {}),
             # identidad: las personas salen del analisis previo (antes, por orden de aparicion): no mezclar
             **({"personas": "analisis", "personas_fps": self.personas_fps_var.get(),
                 "personas_max": self.personas_max_var.get()} if self.asignacion_var.get() == "identidad" else {}),
@@ -2200,6 +2435,7 @@ class FaceSwapApp:
             messagebox.showerror("Error", str(e))
         finally:
             self.processing = False
+            self.prueba_fps = None
             self.opciones_proceso = None
             self.process_button.state(['!disabled'])
             self.status_label.config(text="Processing complete")
@@ -2264,6 +2500,8 @@ class FaceSwapApp:
                 progreso=progreso,
                 cancelado=lambda: self.detener_video,
                 fragmento=fragmento,
+                avisar=lambda texto: (print(texto), self.root.after(0, lambda: self.status_label.config(text=texto))),
+                fps_prueba=self.prueba_fps,
             )
         finally:
             self.root.after(0, lambda: self.detener_button.state(['disabled']))
@@ -2272,6 +2510,13 @@ class FaceSwapApp:
             messagebox.showinfo("Detenido", "Proceso detenido. Lo procesado quedó guardado.\n\n"
                                 "Para continuar, vuelve a procesar el mismo video con la misma salida y las "
                                 "mismas opciones, y elige «Sí» cuando pregunte.")
+        elif self.prueba_fps:
+            self.root.after(0, lambda: self.progress.configure(value=100))
+            if messagebox.askyesno("Video de prueba", f"Video de prueba guardado en:\n{final_output}\n\n¿Abrirlo?"):
+                try:
+                    os.startfile(final_output)
+                except (AttributeError, OSError) as e:  # os.startfile solo existe en Windows
+                    messagebox.showinfo("Video de prueba", f"Ábrelo desde la carpeta de salida ({e})")
         else:
             self.root.after(0, lambda: self.progress.configure(value=100))
             if self.zip_var.get():
@@ -2355,7 +2600,7 @@ class FaceSwapApp:
         self.status_label.config(text=f"Procesando imágenes: {hechas}/{total}")
 
     def process_image(self, caras_src):
-        target_img = cv2.imread(self.target_path)
+        target_img = leer(self.target_path)
         if target_img is None:
             raise Exception("No se pudo leer la imagen destino")
             
@@ -2368,7 +2613,7 @@ class FaceSwapApp:
         output_filename = f"{self.output_filename_var.get()}.jpg"
         output_path = os.path.join(self.output_path_var.get(), output_filename)
         
-        cv2.imwrite(output_path, result)
+        guardar(output_path, result)
         
         self.status_label.config(text="Procesamiento de imagen completado")
         self.progress['value'] = 100
@@ -2394,10 +2639,13 @@ class FaceSwapApp:
         if self.target_path:
             if self.es_video(self.target_path):
                 self.preview_window = PreviewWindow(self.root, self, video_path=self.target_path)
+            elif self.es_carpeta(self.target_path):
+                # Con una carpeta, la barra de abajo pasa de una imagen a otra (también con Anterior/Siguiente o las flechas)
+                imagenes = imagenes_carpeta(self.target_path)
+                if imagenes:
+                    self.preview_window = PreviewWindow(self.root, self, imagenes=imagenes)
             else:
-                # Con una carpeta, el preview usa su primera imagen
-                ruta = imagenes_carpeta(self.target_path)[0] if self.es_carpeta(self.target_path) else self.target_path
-                img = cv2.imread(ruta)
+                img = leer(self.target_path)
                 if img is not None:
                     self.preview_window = PreviewWindow(self.root, self, image=img)
 

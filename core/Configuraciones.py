@@ -13,6 +13,7 @@ VERSION = 1
 DEFECTOS = {
     "asignacion": "posicion",
     "genero": "todos",
+    "caras_inclinadas": True,
     "personas_fps": FPS_PERSONAS,
     "personas_max": MAX_PERSONAS,
     "indices_fuente": "0",
@@ -90,7 +91,7 @@ def _texto(valor):
 VALIDADORES = {
     "indices_fuente": _indices,
     "indices_destino": _indices,
-    "zip": _si_no, "zip_conservar": _si_no,
+    "zip": _si_no, "zip_conservar": _si_no, "caras_inclinadas": _si_no,
     "ojos": _si_no, "boca": _si_no, "nariz": _si_no, "frente": _si_no, "oclusion": _si_no, "mejorar": _si_no,
     "maquillaje": _fraccion(0.0, 1.0),
     "fuerza_mejora": _fraccion(0.1, 1.0),

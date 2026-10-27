@@ -155,7 +155,7 @@ El CLI está separado de la interfaz y se ejecuta desde `cli.py`. Tiene dos coma
 | Comando | Para qué sirve |
 |---|---|
 | `process` | Cambia la cara en una imagen o un video. |
-| `crear-modelo` | Crea un modelo de cara (`.npy`) a partir de varias fotos, un collage o videos de la misma persona (`--fotos` y/o `--video`; de los videos saca frames a `--fps` por segundo), para usarlo después como origen en `process` (ver [Modelos de cara](#modelos-de-cara-npy)). |
+| `crear-modelo` | Crea un modelo de cara (`.npy`) a partir de varias fotos, un collage o videos de la misma persona (`--fotos` y/o `--video`; de los videos saca frames a `--fps` por segundo), para usarlo después como origen en `process` (ver [Modelos de cara](#modelos-de-cara-npy)). Con `--extraer-caras` solo guarda las caras por persona para revisarlas antes (ver [Revisar las caras antes de crear el modelo](#revisar-las-caras-antes-de-crear-el-modelo)). |
 | `combinar-modelos` | Une varios modelos de la misma persona en uno solo, como si se hubiera creado con todas sus fotos juntas (ver [Combinar modelos](#combinar-modelos-de-la-misma-persona)). |
 
 Ejemplo de `process` con una imagen:
@@ -187,7 +187,7 @@ src/fotos/                 output/fotos_output/
 └── grupo.jpg      ──►     └── grupo.jpg
 ```
 
-- **En la interfaz:** arrastra la carpeta a la zona **Imagen/Video Destino** o usa el botón **Carpeta de imágenes...** debajo de ella. Se ve la primera imagen y, al lado del botón, cuántas imágenes hay y el nombre de la carpeta donde se guardarán. La salida usa la **Carpeta de Salida**; **Nombre del Archivo** no se usa (cada imagen conserva su nombre). **Abrir Preview** muestra la primera imagen, para ajustar las opciones antes de procesar todas.
+- **En la interfaz:** arrastra la carpeta a la zona **Imagen/Video Destino** o usa el botón **Carpeta de imágenes...** debajo de ella. Se ve la primera imagen y, al lado del botón, cuántas imágenes hay y el nombre de la carpeta donde se guardarán. La salida usa la **Carpeta de Salida**; **Nombre del Archivo** no se usa (cada imagen conserva su nombre). **Abrir Preview** permite revisar el resultado imagen por imagen antes de procesar todas: abajo hay una barra (como la de los videos), los botones **< Anterior** / **Siguiente >** y las flechas ← → del teclado; al lado se ve la posición y el nombre (`3/25 · ana.jpg`).
 - **En la CLI:** `--target` es la carpeta y `--output` la carpeta donde se crea `<nombre>_output`.
 - Solo se toman las imágenes de la carpeta, no las de sus subcarpetas; los archivos se procesan por orden de nombre.
 - Se procesan en paralelo según el **Número de Hilos** (`--threads`), con pocas imágenes en memoria a la vez.
@@ -220,6 +220,7 @@ Opciones de `process`:
                            (en modo identidad con video: numero de persona, 0 = la que mas aparece)
 --asignacion MODO          posicion (por defecto) o identidad
 --genero GENERO            todos (por defecto), mujer u hombre
+--sin-inclinadas           deteccion original: sin buscar caras inclinadas o boca abajo
 --personas-fps N           con identidad en video: frames por segundo del analisis de personas (1)
 --personas-max N           con identidad en video: maximo de frames del analisis, repartidos en todo
                            el video (300)
@@ -258,6 +259,8 @@ Opciones de `process`:
 --start TIEMPO             solo videos: procesa desde este momento (90, 1:30, 1:30.5 o 0:01:30);
                            el resultado es solo el fragmento, con su audio
 --end TIEMPO               solo videos: procesa hasta este momento (ver Procesar solo un fragmento)
+--prueba [FPS]             video de prueba: el fragmento o los primeros 10 s, a FPS (10 por defecto),
+                           guardado como <salida>_prueba.mp4
 --resume                   continúa un video que se cortó, desde donde quedó
 --restart                  borra un proceso sin terminar de esa salida y empieza de cero
 --verbose                  muestra el progreso por frame
@@ -311,18 +314,39 @@ python cli.py combinar-modelos --help
 
 ### Caras inclinadas y boca abajo
 
-No requiere ninguna opción: funciona siempre.
+Activado por defecto: casilla **Caras inclinadas** en la fila **Caras** de la interfaz. Para desactivarlo: desmarcarla, o `--sin-inclinadas` en la CLI (vuelve a la detección original de insightface).
 
-- **Detección:** si no encuentra caras, vuelve a buscar con la imagen girada 90°, 180° y 270°. Las caras muy inclinadas se enderezan y se detectan otra vez para ubicar mejor los ojos, la nariz y la boca.
-- **Máscara de oclusión (`--occlusion`):** la cara se endereza con sus 5 puntos clave antes de generar la máscara, y luego la máscara vuelve a su ángulo original. Así funciona con cualquier inclinación.
+- **Detección:** si no encuentra caras, o si alguna está inclinada más de 45°, vuelve a buscar con la imagen girada 90°, 180° y 270°. Si la misma cara aparece en varios giros, se usa la que quedó más derecha en su giro (ahí el detector ubica mejor los puntos).
+- **Refinado:** las caras inclinadas se enderezan y se detectan otra vez para ubicar mejor ojos, nariz y boca. Entre 10° y 20° de inclinación se **mezclan de a poco** los puntos normales y los refinados, para que la cara pegada no salte de un frame a otro cuando la cabeza se mueve cerca de ese ángulo.
+- **Máscara de oclusión (`--occlusion`):** la cara se endereza con sus 5 puntos clave antes de generar la máscara, y luego la máscara vuelve a su ángulo original.
 
-Para volver al comportamiento anterior, cambie estos valores en el código:
+Medido con una cara girada grado a grado (error = distancia de los puntos a donde deberían estar, en % de la distancia entre ojos):
 
-| Archivo | Valor | Efecto |
-|---|---|---|
-| `core/xseg.py` | `USAR_ALINEACION = False` | Máscara con el recorte rectangular anterior |
-| `core/Face_Analyzer.py` | `ANGULOS_DETECCION = (0,)` | No busca caras en la imagen girada |
-| `core/Face_Analyzer.py` | `UMBRAL_REFINAR_INCLINACION = None` | No re-detecta las caras inclinadas |
+| | Detección original (`--sin-inclinadas`) | Antes del arreglo | Ahora |
+|---|---|---|---|
+| Error medio, de −60° a +60° | 5,9 % | 1,7 % | **1,0 %** |
+| Error con la cabeza a 40-60° | 11 % | 1 % | **0,9 %** |
+| Mayor salto entre un grado y el siguiente | 1,9 % | 4,2 % (a los 27°) | **0,7 %** |
+| Error medio, de −180° a +180° (boca abajo incluido) | 24 % | — | **1,0 %** |
+
+El salto de 4,2 % se veía como la cara "temblando" cuando la cabeza oscilaba cerca de los 30° (el corte anterior). Los videos a medias empezados antes de este cambio no se pueden continuar (la cara se ubica distinto): hay que empezarlos de cero.
+
+Ajustes en el código: `ANGULOS_DETECCION`, `REFINAR_DESDE` (10) y `REFINAR_COMPLETO` (20) en `core/Face_Analyzer.py`; `USAR_ALINEACION` en `core/xseg.py`.
+
+### Caras en primer plano
+
+Cuando la cara llena casi todo el cuadro (selfies, primeros planos), el detector no la encontraba: al procesar se perdía desde que la cara ocupaba un 70-80 % del ancho, y al crear modelos (que detecta a 640 px) desde el 55 %. Ahora, si no encuentra ninguna cara, vuelve a buscar con la imagen dentro de un marco (borde repetido, con la imagen a la mitad o a un tercio de tamaño), así la cara entra en el rango del detector. Funciona siempre, con o sin «Caras inclinadas»; si la cara ya se detectaba, no cambia nada.
+
+Además, cuando el recorte de la cara que usa inswapper se sale de la imagen (primer plano o cara en el borde), lo que quedaba afuera se rellenaba con negro y aparecía un **borde oscuro** en el resultado. Ahora se trabaja con un margen de borde repetido y se recorta al final.
+
+| La cara ocupa del ancho del cuadro | Antes, al procesar | Antes, al crear modelos | Ahora (ambos) |
+|---|---|---|---|
+| 40 % | 5 de 5 | 5 de 5 | 5 de 5 |
+| 55 % | 5 de 5 | 2 de 5 | 5 de 5 |
+| 70 % | 3 de 5 | 0 de 5 | 5 de 5 |
+| 80-140 % | 0-1 de 5 | 0 de 5 | 5 de 5 (error de los puntos 2-7 %) |
+
+Probado con 5 caras generadas por IA. En el borde de un primer plano, el brillo pasó de un 25-50 % más oscuro que el original a igual que el original; con la cara dentro de la imagen el resultado es idéntico píxel a píxel al anterior. Ajuste en el código: `BORDES_PRIMER_PLANO` en `core/Face_Analyzer.py`.
 
 ### Mejorador de caras GPEN (`--enhance`)
 
@@ -675,13 +699,53 @@ En la interfaz: botón **Desde video** (o arrastrar uno o varios videos a la zon
 
 Cómo funciona:
 
-- Los frames se sacan **en memoria**: no se guardan imágenes en disco ni se modifica el video.
+- Los frames se sacan **en memoria**: no se guardan imágenes en disco (salvo si eliges revisar las caras, ver abajo) ni se modifica el video.
 - Como máximo se sacan **200 frames por video**. Si el video es largo, se baja el fps solo lo necesario para repartir esos 200 frames en todo el video (no solo el principio), y se avisa.
 - Cada frame pasa por los mismos filtros que una foto: se descartan las caras borrosas, pequeñas o de perfil, y si aparece otra persona se usa la que más se repite.
 - Se pueden mezclar videos y fotos en la CLI (`--video` y `--fotos` juntos); en la interfaz, o solo videos o solo fotos.
 - El `.json` del modelo indica cuántos frames de cada video aportaron una cara (`videos`) y el fps usado (`fps_video`).
 
 ¿Qué fps elegir? Los frames seguidos de un video son casi iguales, así que más fps no siempre da más parecido: lo que mejora el modelo es que en el video cambien la luz, el ángulo o la expresión. Para un video de 10 a 60 segundos, `1` o `2` alcanza; para uno de varios minutos, `0.5` o menos. Cada frame tarda en analizarse más o menos lo mismo que una foto.
+
+#### Revisar las caras antes de crear el modelo
+
+Para un modelo más fiel, las caras del video se pueden guardar en carpetas, revisar a mano (borrar las borrosas, tapadas, con gestos raros o de otra persona) y crear el modelo solo con las que quedan.
+
+Se guardan en `src/caras_extraidas/<nombre>/`, una carpeta por persona:
+
+```
+src/caras_extraidas/persona1/
+├── persona_1/          la persona que más aparece
+│   ├── 001_persona1_12.0s.jpg    la mejor cara (nítida, de frente y grande)
+│   ├── 002_persona1_3.0s.jpg
+│   └── ...                       las peores quedan al final
+└── persona_2/          otra persona que apareció en el video
+```
+
+El nombre de cada archivo dice de qué segundo del video salió. Cada imagen es un recorte cuadrado con la cara al centro.
+
+Mientras se extraen, las caras se van guardando una por una en `_en_proceso/` dentro de esa carpeta (la interfaz la abre al empezar), así se ve el avance. Al terminar, se reparten en `persona_1`, `persona_2`... ordenadas, y `_en_proceso` desaparece: para separar por persona y ordenar de mejor a peor hace falta haber visto todas las caras.
+
+**En la interfaz:** en la ventana **Desde video**, marca **Revisar las caras antes de crear el modelo**; el botón pasa a decir **Extraer caras**. Al terminar:
+
+1. Se abre la carpeta de `persona_1` en el explorador y una ventana con cada persona (miniatura y cantidad de caras).
+2. Borra las caras malas en el explorador. Para otra persona, elígela en la ventana y pulsa **Abrir carpeta**.
+3. Pulsa **Crear modelo**: se crea con las caras que quedaron en la carpeta de la persona elegida y queda cargado como fuente.
+
+Si cierras la ventana, las caras quedan guardadas: después puedes soltar la carpeta de la persona en la zona de fuente para crear el modelo.
+
+**En la CLI** son dos pasos:
+
+```bash
+# 1. Extraer (sin CARPETA: src/caras_extraidas/<nombre del video>)
+python cli.py crear-modelo --video "src/persona1.mp4" --fps 1 --extraer-caras
+# 2. Revisar la carpeta y crear el modelo con las que quedaron
+python cli.py crear-modelo --fotos "src/caras_extraidas/persona1/persona_1" --output "src/modelos_caras/persona1.npy"
+```
+
+- `--extraer-caras CARPETA` guarda en otra carpeta.
+- Los videos bajados de internet suelen tener nombres muy largos, y Windows no acepta rutas de más de 260 caracteres. Por eso el nombre sugerido (y la carpeta por defecto) se acorta a 40 caracteres y, dentro del nombre de cada cara, el del video a 30.
+- Si ya se extrajeron caras con ese nombre, avisa; con `--overwrite` las reemplaza. Una carpeta que ya tiene otros archivos (no creada por TransferIa) nunca se reemplaza.
 
 **Usar un modelo** como fuente, con las mismas opciones de siempre:
 
@@ -927,8 +991,23 @@ Detalles:
 
 - Para llegar al inicio, si está cerca del principio (hasta 300 frames) lee y descarta los frames anteriores; si está más lejos, salta directo (va al fotograma clave anterior y avanza hasta el frame pedido). Si el salto no queda exacto, lee desde el principio: el fragmento siempre empieza en el frame justo.
 - El audio se recorta al mismo tramo.
+- **Videos con ritmo de frames variable o con audio e imagen que no empiezan juntos** (frecuente en grabaciones de VLC, de pantalla o del celular): se detectan solos y se procesa una copia a ritmo fijo del tramo, con su audio, para que el resultado no quede desfasado. Se avisa al empezar; tarda un poco más y la copia se borra al terminar. En las pruebas, el desfase bajó de hasta 470 ms a menos de 25 ms. Vale también para el video completo.
 - **Detener y continuar** funciona igual dentro del fragmento. Para continuar, el fragmento debe ser el mismo; si cambió el inicio o el fin, avisa *"cambió el fragmento del video (inicio o fin)"* y no deja continuar.
 - Pruebas con un video numerado de 600 frames (fotograma clave cada 50): fragmentos cerca del inicio (10-40), lejos (437-512), hasta el final (550-600) y detenido + continuado (300-420); en todos salieron exactamente esos frames, en orden, y el audio dura lo mismo que el fragmento (±0.01 s).
+
+### Video de prueba
+
+Para ver cómo queda antes de procesar un video entero: botón **Video de prueba** (fila de abajo de "Configuración de Procesamiento"), o `--prueba` en la CLI.
+
+- Procesa **el fragmento elegido** o, si no hay, **los primeros 10 segundos**, con las opciones actuales, a **10 fps** por defecto (se puede elegir entre 1 y 30).
+- Se guarda como `<nombre>_prueba.mp4` en la carpeta de salida: el resultado final no se toca. Al terminar ofrece abrirlo.
+- El audio queda sincronizado (el tramo se prepara a esos fps con la imagen y el audio alineados).
+- ¿Por qué 10 fps? Es un tercio del trabajo de un video a 30 fps y alcanza para juzgar parecido, color, oclusión y ojos. Con menos se ve entrecortado: se pierden parpadeos y movimientos de boca, y cada imagen puede quedar hasta medio frame corrida respecto del sonido (63 ms a 8 fps, 50 ms a 10 fps).
+
+```bash
+python cli.py process --source "src/cara.jpg" --target "src/video.mp4" --output "output/resultado.mp4" --prueba
+python cli.py process --source "src/cara.jpg" --target "src/video.mp4" --output "output/resultado.mp4" --prueba 12 --start 1:00 --end 1:20
+```
 
 ## 🎯 Reglas y Consideraciones
 

@@ -3,10 +3,12 @@ import argparse
 import subprocess
 
 import cv2
+from core.Imagenes import leer, guardar
 
 from core.Face_Swaper import Swapper_Faces
+from core.Face_Analyzer import Analyzer_Faces
 from core.Identidades import Registro_Identidades
-from core.Modelo_Cara import Modelo_Cara, FPS_VIDEO, MAX_FRAMES_VIDEO
+from core.Modelo_Cara import Modelo_Cara, FPS_VIDEO, MAX_FRAMES_VIDEO, CARPETA_CARAS
 from core.Mejorador import validar_minimo, MINIMO_POR_DEFECTO
 from core.Proceso_Carpeta import imagenes_carpeta, carpeta_salida, procesar_carpeta, SUFIJO_SALIDA
 from core import Configuraciones
@@ -14,6 +16,7 @@ from core.Empaquetar import empaquetar, ruta_zip, disponible as zip_disponible
 from core.Personas import (Personas, validar_fps, validar_maximo, FPS as PERSONAS_FPS,
                            MAX_FRAMES as PERSONAS_MAX)
 from core.Proceso_Video import (procesar_video, Trabajo_Video, CONTENEDORES, CODECS, CALIDAD, info_video,
+                                FPS_PRUEBA, SEGUNDOS_PRUEBA,
                                 fragmento_en_frames)
 
 
@@ -102,7 +105,7 @@ def build_parser():
         choices=["posicion", "identidad"],
         default="posicion",
         help="como emparejar caras destino: por posicion (izquierda a derecha) o por identidad "
-             "(--target-index = orden en que cada persona aparece por primera vez); por defecto: posicion",
+             "(en video, --target-index = numero de persona: 0 = la que mas aparece; en imagenes, de izquierda a derecha); por defecto: posicion",
     )
     process_parser.add_argument(
         "--personas-fps",
@@ -117,6 +120,12 @@ def build_parser():
         default=PERSONAS_MAX,
         help=f"con --asignacion identidad en video: maximo de frames del analisis, repartidos en todo el video "
              f"(por defecto {PERSONAS_MAX})",
+    )
+    process_parser.add_argument(
+        "--sin-inclinadas",
+        action="store_true",
+        help="deteccion original de caras: sin buscar caras inclinadas o boca abajo (girando la imagen) ni "
+             "refinar sus puntos",
     )
     process_parser.add_argument(
         "--genero",
@@ -257,6 +266,17 @@ def build_parser():
         help="solo videos: procesa hasta este momento (segundos, m:ss o h:mm:ss). Por defecto: hasta el final",
     )
     process_parser.add_argument(
+        "--prueba",
+        type=float,
+        nargs="?",
+        const=FPS_PRUEBA,
+        default=None,
+        metavar="FPS",
+        help=f"video de prueba: solo el fragmento (--start/--end) o los primeros {SEGUNDOS_PRUEBA} s, a FPS frames "
+             f"por segundo (sin numero: {FPS_PRUEBA:g}), con el audio sincronizado. Se guarda como "
+             f"<salida>_prueba.mp4",
+    )
+    process_parser.add_argument(
         "--resume",
         action="store_true",
         help="continua un video que se corto (Ctrl+C, cierre o apagon) desde donde quedo; "
@@ -327,13 +347,22 @@ def build_parser():
     )
     modelo_parser.add_argument(
         "--output",
-        required=True,
-        help="archivo .npy a crear; junto a el se guardan una miniatura .jpg y un .json con los datos",
+        help="archivo .npy a crear; junto a el se guardan una miniatura .jpg y un .json con los datos "
+             "(no hace falta con --extraer-caras)",
+    )
+    modelo_parser.add_argument(
+        "--extraer-caras",
+        nargs="?",
+        const="",
+        metavar="CARPETA",
+        help="no crea el modelo: guarda las caras en CARPETA/persona_1, persona_2... (la que mas aparece primero), "
+             "ordenadas de mejor a peor, para revisarlas y borrar las malas. Despues: crear-modelo --fotos "
+             f"CARPETA/persona_1 --output ... Sin CARPETA: {os.path.join(CARPETA_CARAS, '<nombre del video>')}",
     )
     modelo_parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="reemplaza el modelo si ya existe",
+        help="reemplaza el modelo si ya existe (con --extraer-caras: reemplaza las caras ya extraidas)",
     )
 
     combinar_parser = subparsers.add_parser(
@@ -442,7 +471,7 @@ class _ModoIdentidad:
         margen = int((x2 - x1) * 0.3)
         miniatura = frame[max(0, y1 - margen):y2 + margen, max(0, x1 - margen):x2 + margen]
         ruta = os.path.join(self.carpeta_miniaturas, f"destino_{identidad}.jpg")
-        cv2.imwrite(ruta, miniatura)
+        guardar(ruta, miniatura)
 
         momento = ""
         if self.fps:
@@ -476,7 +505,7 @@ class _ModoIdentidad:
 
 
 def _process_image(swapper, caras_src, target_path, output_path, args):
-    target_img = cv2.imread(target_path)
+    target_img = leer(target_path)
     if target_img is None:
         raise ValueError(f"No se pudo leer la imagen destino: {target_path}")
 
@@ -486,7 +515,7 @@ def _process_image(swapper, caras_src, target_path, output_path, args):
         result = modo.cambiar(target_img, caras_dst, modo.registro.copia_refs())
     else:
         result = _swap_frame(swapper, caras_src, target_img, args)
-    if not cv2.imwrite(output_path, result):
+    if not guardar(output_path, result):
         raise RuntimeError(f"No se pudo escribir el archivo: {output_path}")
 
 
@@ -516,6 +545,9 @@ def _firma_opciones(args):
         firma.pop("oclusion_modo", None)  # "debil" es el de antes: los videos empezados antes siguen
     if not args.occlusion and args.occlusion_mode != "None":
         firma["nitidez_sin_oclusion"] = True  # antes el filtro sin --occlusion no se aplicaba: no mezclar videos
+    firma["deteccion"] = 2  # caras inclinadas sin saltos (mezcla entre 10 y 20 grados): otros puntos
+    if not firma.get("sin_inclinadas"):
+        firma.pop("sin_inclinadas", None)
     if args.asignacion == "identidad":
         firma["personas"] = "analisis"  # antes se numeraban por orden de aparicion: no mezclar videos
     else:
@@ -590,6 +622,7 @@ def _process_video(swapper, caras_src, target_path, output_path, args):
         estado=modo,
         progreso=progreso,
         fragmento=fragmento,
+        fps_prueba=args.prueba,
     )
     print()
     if resultado == "cancelado":
@@ -640,7 +673,7 @@ def _cargar_caras_fuente(swapper, source):
     source_path = os.path.abspath(source)
     if not os.path.isfile(source_path):
         raise FileNotFoundError(f"No existe la imagen fuente: {source_path}")
-    source_img = cv2.imread(source_path)
+    source_img = leer(source_path)
     if source_img is None:
         raise ValueError(f"No se pudo leer la imagen fuente: {source_path}")
     caras = swapper.detectar_caras(source_img)
@@ -651,11 +684,15 @@ def _cargar_caras_fuente(swapper, source):
 
 def run_crear_modelo(args):
     try:
-        salida = os.path.abspath(args.output)
-        if not salida.lower().endswith(".npy"):
-            salida += ".npy"
-        if os.path.exists(salida) and not args.overwrite:
-            raise FileExistsError(f"El modelo ya existe; usa --overwrite: {salida}")
+        extraer = args.extraer_caras is not None
+        if not extraer:
+            if not args.output:
+                raise ValueError("Indica --output (el .npy a crear), o --extraer-caras para revisar las caras antes")
+            salida = os.path.abspath(args.output)
+            if not salida.lower().endswith(".npy"):
+                salida += ".npy"
+            if os.path.exists(salida) and not args.overwrite:
+                raise FileExistsError(f"El modelo ya existe; usa --overwrite: {salida}")
         if not args.fotos and not args.video:
             raise ValueError("Indica --fotos, --video o ambos")
         for ruta in args.fotos + args.video:
@@ -671,6 +708,19 @@ def run_crear_modelo(args):
             raise ValueError("--fps debe ser mayor que 0 y como maximo 60")
 
         swapper = Swapper_Faces(os.path.join(os.path.abspath("models"), "inswapper128.onnx"))
+        if extraer:
+            primera = os.path.normpath((args.video + args.fotos)[0])
+            carpeta = args.extraer_caras or os.path.join(
+                CARPETA_CARAS, Modelo_Cara.nombre_seguro(os.path.splitext(os.path.basename(primera))[0]) or "caras")
+            datos = Modelo_Cara.extraer_caras(args.fotos + args.video, swapper.get_Analizador(), carpeta,
+                                              fps_video=args.fps, reemplazar=args.overwrite)
+            print(f"{datos['caras']} cara(s) guardadas en {datos['carpeta']}:")
+            for persona in datos["personas"]:
+                print(f"  {os.path.basename(persona['carpeta'])}: {persona['caras']} cara(s)")
+            print("Revisa la carpeta, borra las caras malas (borrosas, tapadas, de otra persona) y crea el modelo:\n"
+                  f'  python cli.py crear-modelo --fotos "{datos["personas"][0]["carpeta"]}" --output '
+                  f'src/modelos_caras/<nombre>.npy')
+            return 0
         datos = Modelo_Cara.crear(args.fotos + args.video, swapper.get_Analizador(), salida, fps_video=args.fps)
 
         similitud = datos["similitud_promedio"]
@@ -728,6 +778,16 @@ def run_cli(args):
         output_path = os.path.abspath(args.output)
 
         es_carpeta = os.path.isdir(target_path)
+        if args.prueba is not None:
+            if os.path.splitext(target_path)[1].lower() not in VIDEO_EXTENSIONS:
+                raise ValueError("--prueba es solo para videos")
+            if not 1 <= args.prueba <= 30:
+                raise ValueError("--prueba: los fps deben estar entre 1 y 30")
+            base, extension = os.path.splitext(output_path)
+            output_path = f"{base}_prueba{extension or '.mp4'}"
+            if args.start is None and args.end is None:
+                args.end = float(SEGUNDOS_PRUEBA)
+            args.overwrite, args.resume, args.restart = True, False, True  # la prueba siempre empieza de cero
         if es_carpeta:
             # La salida es una carpeta nueva dentro de --output: fotos/ -> <output>/fotos_output/
             output_path = carpeta_salida(target_path, output_path)
@@ -764,6 +824,7 @@ def run_cli(args):
         if not os.path.isfile(model_path):
             raise FileNotFoundError(f"No existe el modelo requerido: {model_path}")
 
+        Analyzer_Faces.CARAS_INCLINADAS = not args.sin_inclinadas
         swapper = Swapper_Faces(model_path)
         caras_src = _cargar_caras_fuente(swapper, args.source)
         if es_carpeta:
@@ -826,6 +887,8 @@ def _opciones_de_config(nombre):
         if not aviso.startswith("No trae"):
             print(f"Aviso ({nombre}): {aviso}", file=os.sys.stderr)
     opciones = {_CONFIG_A_OPCION[c]: v for c, v in ajustes.items() if c in _CONFIG_A_OPCION}
+    if "caras_inclinadas" in ajustes:
+        opciones["sin_inclinadas"] = not ajustes["caras_inclinadas"]
     if "mejorar" in ajustes:
         opciones["enhance"] = ajustes.get("fuerza_mejora", 0.8) if ajustes["mejorar"] else 0.0
     return opciones
@@ -835,6 +898,7 @@ def _config_de_opciones(args):
     """Opciones de "process" con las claves de core/Configuraciones.py (para --save-config)"""
     ajustes = {c: getattr(args, o) for c, o in _CONFIG_A_OPCION.items()}
     ajustes["mejorar"] = args.enhance > 0
+    ajustes["caras_inclinadas"] = not args.sin_inclinadas
     ajustes["fuerza_mejora"] = args.enhance if args.enhance >= 0.1 else Configuraciones.DEFECTOS["fuerza_mejora"]
     return ajustes
 

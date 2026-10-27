@@ -1,4 +1,5 @@
 import cv2
+from core.Imagenes import leer, guardar
 import numpy as np
 import insightface
 from insightface.app import FaceAnalysis
@@ -99,7 +100,7 @@ class FaceEnhancer:
         
         # Guardar resultado si se especifica una ruta
         if output_path:
-            cv2.imwrite(output_path, result)
+            guardar(output_path, result)
         
         return result
 
@@ -144,7 +145,7 @@ if __name__ == "__main__":
     enhancer = FaceEnhancer()
     
     # Ejemplo de uso con imagen ya cargada con OpenCV
-    img = cv2.imread("ruta/a/imagen_con_rostros_pixelados.jpg")
+    img = leer("ruta/a/imagen_con_rostros_pixelados.jpg")
     if img is not None:
         try:
             # Procesar la imagen

@@ -1,6 +1,7 @@
 import os
 import json
 import cv2
+from core.Imagenes import leer, guardar
 import numpy as np
 from core.Identidades import Registro_Identidades
 from core.Modelo_Cara import Modelo_Cara
@@ -201,7 +202,7 @@ class Personas:
                 os.remove(os.path.join(carpeta, nombre))
         for i, p in enumerate(self.lista):
             if p["miniatura"] is not None:
-                cv2.imwrite(os.path.join(carpeta, f"persona_{i}.jpg"), p["miniatura"])
+                guardar(os.path.join(carpeta, f"persona_{i}.jpg"), p["miniatura"])
         datos = {"clave": clave, "personas": [{"apariciones": p["apariciones"], "desde": round(p["desde"], 2),
                                                "refs": np.round(p["refs"], 6).tolist()} for p in self.lista]}
         with open(os.path.join(carpeta, "personas.json"), "w", encoding="utf-8") as archivo:
@@ -225,7 +226,7 @@ class Personas:
         for i, p in enumerate(datos.get("personas", [])):
             mini = os.path.join(carpeta, f"persona_{i}.jpg")
             lista.append({"refs": np.asarray(p["refs"], dtype=np.float32), "apariciones": int(p["apariciones"]),
-                          "desde": float(p["desde"]), "miniatura": cv2.imread(mini) if os.path.isfile(mini) else None})
+                          "desde": float(p["desde"]), "miniatura": leer(mini) if os.path.isfile(mini) else None})
         return Personas(lista)
 
 

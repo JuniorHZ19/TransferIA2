@@ -1,5 +1,6 @@
 import os
 import cv2
+from core.Imagenes import leer, guardar
 from concurrent.futures import ThreadPoolExecutor
 from core.Modelo_Cara import EXTENSIONES_IMAGEN
 
@@ -52,7 +53,7 @@ def procesar_carpeta(imagenes, destino, preparar, hilos=1, progreso=None, cancel
             tanda = []
             for numero in range(inicio, min(total, inicio + hilos * 2)):
                 ruta = imagenes[numero]
-                imagen = cv2.imread(ruta)
+                imagen = leer(ruta)
                 if imagen is None:
                     errores.append((os.path.basename(ruta), "no se pudo leer"))
                     continue
@@ -64,7 +65,7 @@ def procesar_carpeta(imagenes, destino, preparar, hilos=1, progreso=None, cancel
             for ruta, futuro in tanda:
                 nombre = os.path.basename(ruta)
                 try:
-                    if not cv2.imwrite(os.path.join(destino, nombre), futuro.result()):
+                    if not guardar(os.path.join(destino, nombre), futuro.result()):
                         raise RuntimeError("no se pudo escribir")
                     guardadas += 1
                 except Exception as error:

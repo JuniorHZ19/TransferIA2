@@ -7,9 +7,21 @@ import insightface
 # Poner (0,) para volver al comportamiento anterior (solo deteccion normal).
 ANGULOS_DETECCION = (0, 90, 180, 270)
 
-# Si una cara esta inclinada (a la izquierda o derecha) mas de estos grados, se endereza la imagen
-# y se vuelve a detectar para obtener puntos clave mas precisos. Poner None para desactivarlo.
-UMBRAL_REFINAR_INCLINACION = 30
+# Caras inclinadas (a la izquierda o derecha): se endereza la imagen y se vuelve a detectar para obtener puntos
+# clave mas precisos. Entre REFINAR_DESDE y REFINAR_COMPLETO grados se mezclan de a poco los puntos normales con
+# los refinados: un corte de golpe (antes a los 30) hacia saltar la cara pegada de un frame a otro cuando la
+# cabeza oscilaba cerca del corte. Poner REFINAR_DESDE = None para desactivarlo.
+REFINAR_DESDE = 10
+REFINAR_COMPLETO = 20
+
+# Caras en primer plano: el detector no ve una cara que ocupa mas o menos el 70 % del cuadro o mas (a 640 px,
+# desde el 55 %). Si no encuentra ninguna, se vuelve a buscar con la imagen dentro de un marco, en este orden:
+# (margen por lado en proporcion al lado mayor, tipo de borde). Marco x2 con borde repetido es lo mas preciso
+# hasta el 100 %; x3 rescata hasta 125 %. Despues los bordes negros de menor a mayor: en zoom extremo (solo ojos y
+# nariz) el negro x3 encuentra la cara pero con los puntos desviados un 14-15 % de la distancia entre ojos, y los
+# de 0.6 / 0.75 la encuentran con 4-7 %; el negro x3 queda como ultimo recurso (140 %).
+BORDES_PRIMER_PLANO = ((0.5, cv2.BORDER_REPLICATE), (1.0, cv2.BORDER_REPLICATE), (0.6, cv2.BORDER_CONSTANT),
+                       (0.75, cv2.BORDER_CONSTANT), (1.0, cv2.BORDER_CONSTANT))
 
 class Analyzer_Faces:
 
@@ -35,6 +47,9 @@ class Analyzer_Faces:
      '''
     
     _ANALIZADOR_CARA = None  # atributo de clase (constante/singleton)
+    # False = deteccion original de insightface, sin girar la imagen ni refinar caras inclinadas
+    # (opcion «Caras inclinadas» de la interfaz y --sin-inclinadas de la CLI)
+    CARAS_INCLINADAS = True
 
     def __init__(self):
 
@@ -86,7 +101,9 @@ class Analyzer_Faces:
         '''Detecta caras probando cada angulo; las coordenadas (bbox, kps, landmarks) se devuelven en el
            sistema del frame original. Permite caras inclinadas a la izquierda, derecha o boca abajo.
            Una deteccion solo se da por buena si la cara queda casi derecha (+-45) en ese giro; si no,
-           se sigue probando y por cada cara se elige la deteccion con mayor det_score.'''
+           se sigue probando y por cada cara se elige la que quedo mas derecha en su giro (_unir_duplicadas).'''
+        if not Analyzer_Faces.CARAS_INCLINADAS:
+            return self._detectar_primer_plano(frame)
         if angulos is None:
             angulos = ANGULOS_DETECCION
 
@@ -94,10 +111,14 @@ class Analyzer_Faces:
         for ang in angulos:
             if ang == 0:
                 rot, M_inv = frame, None
+                caras = self._detectar_primer_plano(frame)
             else:
                 rot, M_inv = self._rotar(frame, ang)
-            caras = Analyzer_Faces._ANALIZADOR_CARA.get(rot)
-            confiables = all(abs(self.inclinacion(c)) <= 45 for c in caras)
+                caras = Analyzer_Faces._ANALIZADOR_CARA.get(rot)
+            for c in caras:
+                # Inclinacion en la imagen donde se detecto: cuanto mas derecha, mas precisos los puntos
+                c.inclinacion_deteccion = abs(self.inclinacion(c))
+            confiables = all(c.inclinacion_deteccion <= 45 for c in caras)
             if M_inv is not None:
                 for c in caras:
                     self._mapear_cara(c, M_inv)
@@ -107,15 +128,48 @@ class Analyzer_Faces:
 
         caras = self._unir_duplicadas(candidatas)
 
-        if UMBRAL_REFINAR_INCLINACION is not None:
+        if REFINAR_DESDE is not None:
             caras = [self._refinar_cara_inclinada(frame, c) for c in caras]
 
         return caras
 
+    def _detectar_primer_plano(self, frame):
+        '''Deteccion normal; si no encuentra ninguna cara, prueba con la imagen dentro de un marco (BORDES_PRIMER_PLANO),
+           para las caras en primer plano que el detector no ve porque ocupan casi todo el cuadro. Las coordenadas
+           se devuelven en el frame original.'''
+        caras = Analyzer_Faces._ANALIZADOR_CARA.get(frame)
+        if caras:
+            return caras
+        alto, ancho = frame.shape[:2]
+        for factor, borde in BORDES_PRIMER_PLANO:
+            p = int(max(alto, ancho) * factor)
+            con_marco = cv2.copyMakeBorder(frame, p, p, p, p, borde, value=(0, 0, 0))
+            caras = Analyzer_Faces._ANALIZADOR_CARA.get(con_marco)
+            if caras:
+                for c in caras:
+                    self._desplazar_cara(c, -p, -p)
+                return caras
+        return []
+
+    @staticmethod
+    def _desplazar_cara(c, dx, dy):
+        '''Mueve bbox, puntos y landmarks de una cara (del frame con marco al frame original)'''
+        c.kps = (c.kps + [dx, dy]).astype(np.float32)
+        c.bbox = (c.bbox + [dx, dy, dx, dy]).astype(np.float32)
+        if c.get("landmark_2d_106") is not None:
+            c.landmark_2d_106 = (c.landmark_2d_106 + [dx, dy]).astype(np.float32)
+        if c.get("landmark_3d_68") is not None:
+            c.landmark_3d_68 = (c.landmark_3d_68 + [dx, dy, 0]).astype(np.float32)
+        return c
+
     def _unir_duplicadas(self, caras):
-        '''Si la misma cara se detecto en varios giros, se queda con la de mayor det_score'''
+        '''Si la misma cara se detecto en varios giros, se queda con la que quedo mas derecha en su giro (el
+           detector ubica mejor los puntos de una cara derecha; el det_score no sirve para esto: a 47 grados la
+           deteccion del giro de 90 tenia mas puntaje y los puntos 4 veces mas lejos). A igual inclinacion, el
+           mayor det_score.'''
         elegidas = []
-        for c in sorted(caras, key=lambda c: c.det_score, reverse=True):
+        orden = lambda c: (round(c.get("inclinacion_deteccion", 0.0) / 5.0), -c.det_score)
+        for c in sorted(caras, key=orden):
             cx, cy = (c.bbox[:2] + c.bbox[2:]) / 2
             duplicada = False
             for e in elegidas:
@@ -144,10 +198,12 @@ class Analyzer_Faces:
         return float(np.degrees(np.arctan2(vy, vx)))
 
     def _refinar_cara_inclinada(self, frame, cara):
-        '''Si la cara esta muy inclinada, endereza la imagen segun la linea de los ojos, vuelve a detectar
-           y se queda con la cara mas cercana a la original. Los puntos clave salen mas precisos.'''
+        '''Si la cara esta inclinada, endereza la imagen segun la linea de los ojos, vuelve a detectar
+           y se queda con la cara mas cercana a la original. Los puntos clave salen mas precisos.
+           Entre REFINAR_DESDE y REFINAR_COMPLETO grados mezcla los puntos normales con los refinados, para que
+           la cara no salte de un frame a otro al pasar por ese angulo.'''
         angulo = self.inclinacion(cara)
-        if abs(angulo) <= UMBRAL_REFINAR_INCLINACION:
+        if abs(angulo) <= REFINAR_DESDE:
             return cara
 
         rot, M_inv = self._rotar(frame, angulo)
@@ -163,6 +219,15 @@ class Analyzer_Faces:
         dist_ojos = np.linalg.norm(cara.kps[1] - cara.kps[0])
         if np.linalg.norm(mejor.kps.mean(0) - centro) > dist_ojos or mejor.det_score < cara.det_score * 0.9:
             return cara
+
+        peso = float(np.clip((abs(angulo) - REFINAR_DESDE) / (REFINAR_COMPLETO - REFINAR_DESDE), 0.0, 1.0))
+        if peso < 1.0:
+            # Transicion: puntos, recuadro y 106 puntos a mitad de camino entre la deteccion normal y la refinada
+            mejor.kps = ((1 - peso) * cara.kps + peso * mejor.kps).astype(np.float32)
+            mejor.bbox = ((1 - peso) * cara.bbox + peso * mejor.bbox).astype(np.float32)
+            if cara.get("landmark_2d_106") is not None and mejor.get("landmark_2d_106") is not None:
+                mejor.landmark_2d_106 = ((1 - peso) * cara.landmark_2d_106
+                                         + peso * mejor.landmark_2d_106).astype(np.float32)
         return mejor
 
     def filtrar_genero(self, caras, genero="todos"):

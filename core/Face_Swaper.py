@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import insightface
 from insightface.utils import face_align
+from insightface.app.common import Face
 import array
 from core.Face_Analyzer import Analyzer_Faces
 from core.xseg import DFL_XSeg_Model
@@ -181,6 +182,20 @@ class Swapper_Faces:
         '''
 
         modelo = self.__class__._SWAPPER_MODEL
+        # Si el recorte alineado de la cara se sale del frame (primer plano, cara en el borde), inswapper lo
+        # rellena con negro y ese negro termina pegado en el borde del resultado. Se trabaja sobre el frame con
+        # un margen de borde repetido y al final se recorta: las caras que entran en el frame no cambian
+        margen = self._margen_recorte(frame.shape[:2], cara_dst, modelo.input_size[0])
+        if margen:
+            alto, ancho = frame.shape[:2]
+            grande = cv2.copyMakeBorder(frame, margen, margen, margen, margen, cv2.BORDER_REPLICATE)
+            resultado = self.pegar_cara(grande, cara_src, self._cara_desplazada(cara_dst, margen), mascara, color,
+                                        maquillaje, devolver_zona)
+            recorte = (slice(margen, margen + alto), slice(margen, margen + ancho))
+            if devolver_zona:
+                return resultado[0][recorte].copy(), resultado[1][recorte].copy()
+            return resultado[recorte].copy()
+
         if mascara not in MASCARAS:
             mascara = "amplia"
         maquillaje = float(np.clip(maquillaje or 0.0, 0.0, 1.0))
@@ -216,6 +231,32 @@ class Swapper_Faces:
 
         resultado = zona * cara_fake.astype(np.float32) + (1 - zona) * frame.astype(np.float32)
         return (resultado.astype(np.uint8), zona[..., 0]) if devolver_zona else resultado.astype(np.uint8)
+
+
+    @staticmethod
+    def _margen_recorte(tamano, cara, lado):
+
+        '''Cuantos pixeles se sale del frame el recorte alineado de la cara que usa inswapper (0 = entra entero)'''
+
+        M = face_align.estimate_norm(cara.kps, lado)
+        IM = cv2.invertAffineTransform(M)
+        esquinas = np.array([[0, 0], [lado, 0], [0, lado], [lado, lado]], np.float32) @ IM[:, :2].T + IM[:, 2]
+        alto, ancho = tamano
+        sobra = max(0.0, -esquinas[:, 0].min(), -esquinas[:, 1].min(), esquinas[:, 0].max() - ancho,
+                    esquinas[:, 1].max() - alto)
+        return int(np.ceil(sobra)) + 2 if sobra > 0 else 0
+
+    @staticmethod
+    def _cara_desplazada(cara, d):
+
+        '''Copia de la cara con sus puntos movidos d pixeles (al frame con margen)'''
+
+        copia = Face(dict(cara))
+        copia.kps = (cara.kps + d).astype(np.float32)
+        copia.bbox = (cara.bbox + d).astype(np.float32)
+        if cara.get("landmark_2d_106") is not None:
+            copia.landmark_2d_106 = (cara.landmark_2d_106 + d).astype(np.float32)
+        return copia
 
 
     def aplicar_nitidez(self, frame, fake_frame, cara, modo, zona):

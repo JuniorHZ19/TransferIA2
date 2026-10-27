@@ -165,6 +165,10 @@ class DFL_XSeg_Model:
                               borderMode=cv2.BORDER_REPLICATE, flags=cv2.INTER_AREA)
         return crop, M
 
+    def _inferir(self, crop):
+        """Mascara cruda (256x256, 0-1) de un recorte alineado"""
+        return np.array(self.run_inference(self.preprocess(crop))).reshape((256, 256)).astype(np.float32)
+
     def get_complete_mask_alineada(self, img, face):
         """
         Genera la mascara sobre la cara alineada y la devuelve a su posicion/rotacion original
@@ -173,9 +177,18 @@ class DFL_XSeg_Model:
         try:
             h, w = img.shape[:2]
             crop, M = self.align_face(img, face)
+            mask = self._inferir(crop)
 
-            outputs = self.run_inference(self.preprocess(crop))
-            mask = np.array(outputs).reshape((256, 256)).astype(np.float32)
+            # Cara en primer plano: parte del recorte cae fuera del cuadro y se rellena repitiendo el borde. Esas
+            # rayas el modelo las toma como un objeto que tapa la cara y corta la piel visible (entre nariz y boca).
+            # Se repite con dos rellenos sin rayas (espejo y difuso) y se toma el mayor: un falso objeto que sale de
+            # un relleno no sale en el otro, mientras que un objeto real esta dentro del cuadro y lo marcan ambos.
+            valido = cv2.warpAffine(np.full((h, w), 255, np.uint8), M, (256, 256), borderValue=0) > 127
+            if not valido.all():
+                espejo = cv2.warpAffine(img, M, (256, 256), borderMode=cv2.BORDER_REFLECT_101, flags=cv2.INTER_AREA)
+                difuso = crop.copy()
+                difuso[~valido] = cv2.GaussianBlur(crop, (0, 0), 12)[~valido]
+                mask = np.maximum(self._inferir(espejo), self._inferir(difuso))
             mask = cv2.GaussianBlur(mask, (7, 7), 3)
             mask = np.clip(np.power(np.clip(mask, 0, 1), 1.5), 0, 1)
 

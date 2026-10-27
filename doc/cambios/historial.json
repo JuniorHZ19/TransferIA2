@@ -1,0 +1,164 @@
+[
+ {
+  "fecha": "2026-08-21",
+  "titulo": "Punto de partida: barra de progreso e hilos",
+  "tipo": "Nueva función",
+  "resumen": "El programa original (ventana, CLI e inswapper con oclusión XSeg) y la CLI con barra de progreso y --threads funcionando.",
+  "porque": "Al procesar un video por consola no se veía cuánto faltaba, y --threads se validaba pero no se usaba.",
+  "archivos_tocados": [
+   "cli.py",
+   "README.md"
+  ],
+  "archivo": "2026-08-21-punto-de-partida-barra-e-hilos.docx"
+ },
+ {
+  "fecha": "2026-10-13",
+  "titulo": "GPU o CPU: los providers de CUDA",
+  "tipo": "Refactorización",
+  "resumen": "Ocho commits que prueban solo CPU, CUDA con opciones y CUDA simple; el estado final es igual al original.",
+  "porque": "Ajustar en qué procesador corren los modelos (probablemente para Colab).",
+  "archivos_tocados": [
+   "core/Face_Analyzer.py",
+   "core/Face_Swaper.py",
+   "core/xseg.py"
+  ],
+  "archivo": "2026-10-13-gpu-o-cpu-providers-cuda.docx"
+ },
+ {
+  "fecha": "2026-10-23",
+  "titulo": "Caras inclinadas y boca abajo",
+  "tipo": "Corrección",
+  "resumen": "Detección probando giros, refinado de caras inclinadas, máscara de oclusión alineada y corrección de un IndexError con los índices.",
+  "porque": "Con caras de costado o boca abajo los puntos clave caían mal y el resultado salía deformado.",
+  "archivos_tocados": [
+   "core/Face_Analyzer.py",
+   "core/xseg.py",
+   "core/Face_Swaper.py"
+  ],
+  "archivo": "2026-10-23-caras-inclinadas-y-boca-abajo.docx"
+ },
+ {
+  "fecha": "2026-10-26",
+  "titulo": "Vista previa que se actualiza sola",
+  "tipo": "Nueva función",
+  "resumen": "Vistas Deslizar / Lado a lado / Solo resultado, Ver máscara, copiar al portapapeles, actualización automática y procesado en segundo plano.",
+  "porque": "La vista previa era una imagen fija que había que reabrir en cada cambio y congelaba la ventana.",
+  "archivos_tocados": [
+   "app.py",
+   "core/Face_Swaper.py"
+  ],
+  "archivo": "2026-10-26-vista-previa.docx"
+ },
+ {
+  "fecha": "2026-10-26",
+  "titulo": "Cambio de cara: controles finos",
+  "tipo": "Nueva función",
+  "resumen": "Zona de la cara, corrección de color, conservar ojos/boca/nariz, quitar cerquillo y conservar maquillaje.",
+  "porque": "Más control sobre qué se cambia; el maquillaje del destino desaparecía.",
+  "archivos_tocados": [
+   "core/Face_Swaper.py",
+   "app.py",
+   "cli.py"
+  ],
+  "archivo": "2026-10-26-cambio-de-cara-controles.docx"
+ },
+ {
+  "fecha": "2026-10-26",
+  "titulo": "Mejora, nitidez y oclusión",
+  "tipo": "Mejora",
+  "resumen": "GPEN con fuerza y tamaño mínimo, nitidez adaptativa independiente de la oclusión y modos de oclusión débil/adaptable/fuerte.",
+  "porque": "La cara salía blanda (128 px) y se pintaba sobre manos y objetos.",
+  "archivos_tocados": [
+   "core/Mejorador.py",
+   "core/xseg.py",
+   "core/Face_Swaper.py"
+  ],
+  "archivo": "2026-10-26-mejora-nitidez-oclusion.docx"
+ },
+ {
+  "fecha": "2026-10-26",
+  "titulo": "Personas: identidad y género",
+  "tipo": "Nueva función",
+  "resumen": "Filtro por género, asignación por identidad y análisis previo de personas del video.",
+  "porque": "Por posición, las caras se intercambiaban cuando las personas cambiaban de lugar.",
+  "archivos_tocados": [
+   "core/Personas.py",
+   "core/Identidades.py",
+   "core/Face_Analyzer.py"
+  ],
+  "archivo": "2026-10-26-personas-identidad-genero.docx"
+ },
+ {
+  "fecha": "2026-10-26",
+  "titulo": "Modelos de cara (.npy)",
+  "tipo": "Nueva función",
+  "resumen": "Crear modelos con fotos, collage o video; usar varios; combinar y eliminar.",
+  "porque": "Una sola foto da una identidad menos estable que el promedio de varias.",
+  "archivos_tocados": [
+   "core/Modelo_Cara.py",
+   "app.py",
+   "cli.py"
+  ],
+  "archivo": "2026-10-26-modelos-de-cara.docx"
+ },
+ {
+  "fecha": "2026-10-26",
+  "titulo": "Videos, lotes y configuraciones",
+  "tipo": "Nueva función",
+  "resumen": "Detener y continuar tras un corte, sin imágenes temporales, fragmentos, carpetas como destino y configuraciones guardadas.",
+  "porque": "Un corte dejaba el video inservible y había que empezar de cero.",
+  "archivos_tocados": [
+   "core/Proceso_Video.py",
+   "core/Proceso_Carpeta.py",
+   "core/Configuraciones.py"
+  ],
+  "archivo": "2026-10-26-videos-lotes-configuraciones.docx"
+ },
+ {
+  "fecha": "2026-10-26",
+  "titulo": "ZIP con contraseña y una fuente en varias caras",
+  "tipo": "Nueva función",
+  "resumen": "Guardar el resultado en un ZIP AES-256 que se comprueba antes de borrar nada, y la misma cara de la fuente en varias caras del destino.",
+  "porque": "Que los resultados no queden sueltos; con una fuente de una cara solo cambiaba la primera persona.",
+  "archivos_tocados": [
+   "core/Empaquetar.py",
+   "core/Face_Swaper.py",
+   "app.py",
+   "cli.py",
+   "core/Configuraciones.py"
+  ],
+  "archivo": "2026-10-26-zip-y-una-fuente-en-varias-caras.docx"
+ },
+ {
+  "fecha": "2026-10-27",
+  "titulo": "Primeros planos y video",
+  "tipo": "Corrección",
+  "resumen": "Casilla de caras inclinadas, detección de caras en primer plano, sin borde oscuro, oclusión en zoom extremo, video de prueba y videos con audio desfasado (sin commit).",
+  "porque": "Las caras que llenaban el cuadro no se detectaban, dejaban un borde negro, y algunos videos quedaban con el audio corrido 0,47 s.",
+  "archivos_tocados": [
+   "core/Face_Analyzer.py",
+   "core/Face_Swaper.py",
+   "core/xseg.py",
+   "core/Proceso_Video.py",
+   "app.py",
+   "cli.py"
+  ],
+  "archivo": "2026-10-27-primeros-planos-y-video.docx"
+ },
+ {
+  "fecha": "2026-10-27",
+  "titulo": "Extraer caras, carpetas, tildes y rutas",
+  "tipo": "Nueva función",
+  "resumen": "Extraer y revisar las caras antes de crear un modelo, vista previa imagen por imagen de una carpeta, rutas con tildes y nombres de video largos (sin commit).",
+  "porque": "Las caras malas entraban al modelo sin verse, OpenCV no leía ni guardaba rutas con tildes y los nombres largos superaban los 260 caracteres.",
+  "archivos_tocados": [
+   "core/Modelo_Cara.py",
+   "core/Imagenes.py",
+   "app.py",
+   "cli.py",
+   "core/Proceso_Carpeta.py",
+   "core/Personas.py"
+  ],
+  "archivo": "2026-10-27-extraer-caras-carpetas-y-rutas.docx"
+ }
+]
