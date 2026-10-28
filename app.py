@@ -1067,6 +1067,9 @@ class FaceSwapApp:
         self.var_frente = tk.BooleanVar(value=False)
         ttk.Checkbutton(destino_fila, text="Frente (quitar cerquillo)",
                         variable=self.var_frente).pack(side=tk.LEFT, padx=(8, 0))
+        self.var_mejillas = tk.BooleanVar(value=False)
+        ttk.Checkbutton(destino_fila, text="Mejillas y pómulos",
+                        variable=self.var_mejillas).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Label(destino_fila, text="Maquillaje:").pack(side=tk.LEFT, padx=(20, 5))
         self.maquillaje_var = tk.DoubleVar(value=0.0)
         maquillaje_valor = ttk.Label(destino_fila, text="0.00", width=4)
@@ -1302,6 +1305,7 @@ class FaceSwapApp:
             "boca": self.var_boca.get(),
             "nariz": self.var_nariz.get(),
             "frente": self.var_frente.get(),
+            "mejillas": self.var_mejillas.get(),
             "maquillaje": round(self.maquillaje_var.get(), 3),
             "oclusion": self.var_oclucion.get(),
             "oclusion_modo": self.oclusion_modo_var.get(),
@@ -1325,7 +1329,7 @@ class FaceSwapApp:
             "indices_fuente": self.src_indices_var, "indices_destino": self.dst_indices_var,
             "mascara": self.mascara_var, "color": self.color_var,
             "ojos": self.var_ojos, "boca": self.var_boca, "nariz": self.var_nariz, "frente": self.var_frente,
-            "maquillaje": self.maquillaje_var, "oclusion": self.var_oclucion, "mejorar": self.var_mejorar,
+            "mejillas": self.var_mejillas, "maquillaje": self.maquillaje_var, "oclusion": self.var_oclucion, "mejorar": self.var_mejorar,
             "oclusion_modo": self.oclusion_modo_var,
             "fuerza_mejora": self.fuerza_gpen_var, "contenedor": self.contenedor_var, "codec": self.codec_var,
             "carpeta_salida": self.output_path_var, "nombre_archivo": self.output_filename_var,
@@ -2082,6 +2086,7 @@ class FaceSwapApp:
             boca=self.var_boca.get(),
             nariz=self.var_nariz.get(),
             frente=self.var_frente.get(),
+            mejillas=self.var_mejillas.get(),
             mascara=self.mascara_var.get(),
             color=self.color_var.get(),
             maquillaje=self.maquillaje_var.get(),
@@ -2093,6 +2098,7 @@ class FaceSwapApp:
         """Cada cambio en la configuracion actualiza el preview abierto"""
         for var in (self.src_indices_var, self.dst_indices_var, self.asignacion_var, self.genero_var,
                     self.mascara_var, self.color_var, self.var_ojos, self.var_boca, self.var_nariz, self.var_frente,
+                    self.var_mejillas,
                     self.maquillaje_var, self.var_oclucion, self.oclusion_modo_var, self.var_mejorar,
                     self.caras_inclinadas_var,
                     self.fuerza_gpen_var,
@@ -2371,8 +2377,9 @@ class FaceSwapApp:
             "codec": self.codec_var.get(),
             # solo si esta marcada: los videos empezados antes de esta opcion se siguen pudiendo continuar
             **({"frente": True} if self.var_frente.get() else {}),
-            # deteccion de caras inclinadas sin saltos (mezcla gradual entre 10 y 20 grados): otros puntos
-            "deteccion": 2,
+            **({"mejillas": True} if self.var_mejillas.get() else {}),
+            # 2: caras inclinadas sin saltos (mezcla gradual entre 10 y 20 grados); 3: caras volteadas
+            "deteccion": 3,
             **({"sin_inclinadas": True} if not self.caras_inclinadas_var.get() else {}),
             # identidad: las personas salen del analisis previo (antes, por orden de aparicion): no mezclar
             **({"personas": "analisis", "personas_fps": self.personas_fps_var.get(),

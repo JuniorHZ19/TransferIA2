@@ -133,7 +133,7 @@
   "fecha": "2026-10-27",
   "titulo": "Primeros planos y video",
   "tipo": "Corrección",
-  "resumen": "Casilla de caras inclinadas, detección de caras en primer plano, sin borde oscuro, oclusión en zoom extremo, video de prueba y videos con audio desfasado (sin commit).",
+  "resumen": "Casilla de caras inclinadas, detección de caras en primer plano, sin borde oscuro, oclusión en zoom extremo, video de prueba y videos con audio desfasado.",
   "porque": "Las caras que llenaban el cuadro no se detectaban, dejaban un borde negro, y algunos videos quedaban con el audio corrido 0,47 s.",
   "archivos_tocados": [
    "core/Face_Analyzer.py",
@@ -149,7 +149,7 @@
   "fecha": "2026-10-27",
   "titulo": "Extraer caras, carpetas, tildes y rutas",
   "tipo": "Nueva función",
-  "resumen": "Extraer y revisar las caras antes de crear un modelo, vista previa imagen por imagen de una carpeta, rutas con tildes y nombres de video largos (sin commit).",
+  "resumen": "Extraer y revisar las caras antes de crear un modelo, vista previa imagen por imagen de una carpeta, rutas con tildes y nombres de video largos.",
   "porque": "Las caras malas entraban al modelo sin verse, OpenCV no leía ni guardaba rutas con tildes y los nombres largos superaban los 260 caracteres.",
   "archivos_tocados": [
    "core/Modelo_Cara.py",
@@ -160,5 +160,22 @@
    "core/Personas.py"
   ],
   "archivo": "2026-10-27-extraer-caras-carpetas-y-rutas.docx"
+ },
+ {
+  "fecha": "2026-10-28",
+  "titulo": "Caras volteadas y mejillas",
+  "tipo": "Corrección",
+  "resumen": "Las caras inclinadas y medio tapadas (celular, mano) ya no se pegan al revés: se lee la cara al revés si es dudosa y, en videos, se decide con memoria de los frames anteriores. Nueva opción --mejillas para conservar mejillas y pómulos del destino.",
+  "porque": "Con la nariz y la boca tapadas el detector ponía esos puntos del lado de la frente; con una sola imagen la confianza no alcanza para decidir la orientación.",
+  "archivos_tocados": [
+   "core/Face_Analyzer.py",
+   "core/Proceso_Video.py",
+   "core/Face_Swaper.py",
+   "app.py",
+   "cli.py",
+   "core/Configuraciones.py",
+   "README.md"
+  ],
+  "archivo": "2026-10-28-caras-volteadas-y-mejillas.docx"
  }
 ]

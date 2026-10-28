@@ -20,6 +20,7 @@ Transfer-IA es una aplicación de cambio facial que utiliza inteligencia artific
 - Opción para conservar la boca del destino (`--mouth`)
 - Opción para conservar la nariz del destino (`--nose`)
 - Opción para quitar el cerquillo de la fuente: la frente queda la del destino (`--remove-bangs`)
+- Opción para conservar las mejillas y los pómulos del destino (`--mejillas`)
 - Conservar el maquillaje o la pintura de cara del destino (`--makeup`)
 - Mejorador de caras GPEN opcional para más nitidez en piel, ojos y dientes (`--enhance`)
 - Videos que se pueden detener y continuar después, aunque se corte la luz (`--resume`); sin imágenes temporales en disco y con poca RAM
@@ -106,7 +107,7 @@ En la interfaz principal:
      | **Caras** | **Asignación**: `posicion` (izquierda a derecha, como siempre) o `identidad` (ver [Asignación por identidad](#asignación-por-identidad---asignacion-identidad)). **Género destino**: `todos`, `mujer` u `hombre`. **Análisis de personas** (solo con `identidad`): frames por segundo (`1`) y máximo de frames (`300`) del análisis previo del video |
      | **Índices** | **Fuente** y **Destino**: qué cara fuente va en qué cara destino (`0`, `0,1`...). Una misma fuente puede ir a varias caras repitiendo su número: Fuente `0,0` y Destino `0,1` pone la cara 0 en las dos. En modo identidad con video, Destino es el número de persona (0 = la que más aparece); el botón **Ver personas...** muestra quién es cada una (ver [Asignación por identidad](#asignación-por-identidad---asignacion-identidad)) |
      | **Pegado** | **Máscara**: `normal`, `amplia` (por defecto) o `maxima`, cuánta zona de la cara se cambia (ver [Zona de la cara](#zona-de-la-cara---face-mask)). **Corrección de color**: `ninguna` (por defecto), `suave` o `completa`, iguala el color de la cara cambiada a la piel del destino (ver [Corrección de color](#corrección-de-color---color)) |
-     | **Del destino** | **Ojos / Boca / Nariz**: cambia la cara pero deja esas partes originales del destino (ver [ojos](#conservar-ojos-del-destino), [boca](#conservar-boca-del-destino---mouth) y [nariz](#conservar-nariz-del-destino---nose)). **Frente (quitar cerquillo)**: la frente queda la del destino, para cuando la fuente tiene cerquillo (ver [Quitar el cerquillo](#quitar-el-cerquillo-de-la-fuente---remove-bangs)). **Maquillaje**: deslizador de 0 (desactivado) a 1; devuelve el maquillaje o la pintura de cara del destino (ver [Conservar maquillaje](#conservar-maquillaje---makeup)) |
+     | **Del destino** | **Ojos / Boca / Nariz**: cambia la cara pero deja esas partes originales del destino (ver [ojos](#conservar-ojos-del-destino), [boca](#conservar-boca-del-destino---mouth) y [nariz](#conservar-nariz-del-destino---nose)). **Frente (quitar cerquillo)**: la frente queda la del destino, para cuando la fuente tiene cerquillo (ver [Quitar el cerquillo](#quitar-el-cerquillo-de-la-fuente---remove-bangs)). **Mejillas y pómulos**: las mejillas quedan las del destino (ver [Conservar mejillas](#conservar-mejillas-y-pómulos-del-destino---mejillas)). **Maquillaje**: deslizador de 0 (desactivado) a 1; devuelve el maquillaje o la pintura de cara del destino (ver [Conservar maquillaje](#conservar-maquillaje---makeup)) |
      | **Oclusión** | **Activar**: deja el pelo, las manos y los objetos delante de la cara. **Modo**: `debil`, `adaptable` (por defecto) o `fuerte`, cuánta cara puede quedar sobre lo que la tapa (ver [Modo de la oclusión](#modo-de-la-oclusión---oclusion-modo)) |
      | **Nitidez** | **Filtro**: `None`, `natural`, `strong` o `adaptativo` (recomendado). Funciona con o sin la oclusión (ver [Nitidez de la cara](#nitidez-de-la-cara---nitidez)) |
      | **Mejora** | **Mejorar cara (GPEN)** + **Fuerza**: pasa la cara cambiada por el mejorador GPEN para más nitidez; la fuerza va de 0.1 a 1 (0.8 por defecto); tarda unos 0.25 s más por cara. **Cara mínima** + unidad (`px` o `% imagen`): caras más chicas no se mejoran; `96 px` por defecto, o proporcional a la imagen, como `25 % imagen` (ver [Mejorador de caras](#mejorador-de-caras-gpen---enhance)) |
@@ -241,6 +242,7 @@ Opciones de `process`:
                            defecto) o en % del lado más corto de la imagen (25%); 0 = todas
 --nose                     cambia el rostro pero conserva la nariz del destino
 --remove-bangs             quita el cerquillo de la fuente: la frente queda la del destino
+--mejillas                 cambia el rostro pero conserva las mejillas y los pómulos del destino
 --makeup FUERZA            0 (por defecto, desactivado) a 1: conserva el maquillaje o la pintura de cara
                            del destino (Halloween, catrina, pintura artística); más fuerza = más
                            maquillaje y menos parecido con la fuente. Recomendado: 0.7 a 1
@@ -332,6 +334,27 @@ Medido con una cara girada grado a grado (error = distancia de los puntos a dond
 El salto de 4,2 % se veía como la cara "temblando" cuando la cabeza oscilaba cerca de los 30° (el corte anterior). Los videos a medias empezados antes de este cambio no se pueden continuar (la cara se ubica distinto): hay que empezarlos de cero.
 
 Ajustes en el código: `ANGULOS_DETECCION`, `REFINAR_DESDE` (10) y `REFINAR_COMPLETO` (20) en `core/Face_Analyzer.py`; `USAR_ALINEACION` en `core/xseg.py`.
+
+#### Caras inclinadas y tapadas (celular, mano)
+
+Con la nariz y la boca tapadas y la cabeza inclinada, el detector a veces ubicaba los ojos pero ponía la nariz y la boca del lado de la frente: la cara se pegaba **al revés**. Ahora, si una cara es dudosa, se lee también girada 180° y se elige entre las dos lecturas:
+
+- **Cuándo es dudosa:** puntaje del detector menor a 0.72. En videos, además, si quedó con la cabeza hacia abajo o si giró más de 60° respecto del frame anterior (una cabeza no da media vuelta de un frame a otro).
+- **En videos, memoria entre frames:** gana la lectura que sigue la dirección que tenía esa misma cara en los frames anteriores. El recuerdo solo vale si es de hace 0,5 s como mucho, la cara está casi en el mismo lugar y del mismo tamaño, y es la misma persona; así un cambio de plano no arrastra la dirección de otra toma. Funciona con varios hilos.
+- **Sin memoria (fotos, carpetas, o el primer frame):** gana la lectura con la cabeza hacia arriba, salvo que la otra tenga claramente más puntaje. Con la cara de costado (75-105°) se queda la del detector salvo que la otra sea claramente mejor.
+
+Medido con caras de IA (cara girada y medio tapada por un celular, una mano, un libro o un gorro):
+
+| Prueba | Antes | Ahora |
+|---|---|---|
+| Video: cabeza a 45-75° y un celular que tapa nariz y boca 3 s | 29 de 90 frames al revés | **0** |
+| Video: persona boca abajo con el celular | 5 de 90 | **0** |
+| Video: cambios de plano (otra persona en el mismo lugar, la misma en otro lugar) | 39 de 81 | **0** |
+| 525 fotos de −100° a +100° | 410 bien | **424 bien** (ninguna peor) |
+
+No resuelve los ojos tapados (gorro, visera): sin ojos el detector no encuentra la cara. Los videos a medias empezados antes de este cambio no se pueden continuar: hay que empezarlos de cero.
+
+Ajustes en el código: `VERIFICAR_VOLTEO_BAJO`, `MARGEN_VOLTEO`, `MARGEN_VOLTEO_VIDEO`, `SEGUNDOS_MEMORIA`, `PARECIDO_MEMORIA` y `GIRO_MEMORIA` en `core/Face_Analyzer.py`.
 
 ### Caras en primer plano
 
@@ -496,6 +519,20 @@ La nariz es uno de los rasgos que más identifican a una persona, así que conse
 python cli.py process --source "src/cara.jpg" --target "src/video.mp4" --output "output/resultado.mp4" --nose --overwrite
 ```
 
+### Conservar mejillas y pómulos del destino (`--mejillas`)
+
+Con `--mejillas` (o la casilla **Mejillas y pómulos** de la fila «Del destino» en la interfaz) se cambia el rostro completo, pero las **mejillas y los pómulos se toman del destino**: la zona entre el párpado de abajo, el costado de la nariz, la comisura de la boca y el contorno de la cara. Sirve para mantener el rubor, el contorno o el iluminador del destino, o la forma de sus pómulos.
+
+- La zona sale de los 106 puntos de la cara (contorno, ojos, nariz y boca) y se separa un poco de cada uno, para no tocar el párpado, las aletas de la nariz, los labios ni el borde de la cara. Sin los 106 puntos se usa una elipse por lado entre el ojo y la comisura.
+- El borde se difumina más que en ojos, boca y nariz (la mejilla no tiene un borde natural donde esconder el corte). Si el tono de la cara cambiada y el del destino son muy distintos, combínala con `--color completa`.
+- Baja poco el parecido con la fuente: en las pruebas, de 0.91 a 0.87 (con `--nose` baja de 0.89 a 0.79).
+
+```bash
+python cli.py process --source "src/cara.jpg" --target "src/video.mp4" --output "output/resultado.mp4" --mejillas --color completa --overwrite
+```
+
+Ajustes en el código: `MEJILLAS_OJO`, `MEJILLAS_NARIZ`, `MEJILLAS_BOCA`, `MEJILLAS_CONTORNO` y `MEJILLAS_DIFUMINADO` en `core/Face_Swaper.py`.
+
 ### Quitar el cerquillo de la fuente (`--remove-bangs`)
 
 Con `--remove-bangs` (o la casilla **Frente (quitar cerquillo)** de la fila «Del destino» en la interfaz) se cambia el rostro, pero la **frente se toma del destino**, desde un poco arriba de las cejas hasta la raíz del pelo y de sien a sien.
@@ -550,7 +587,7 @@ Siempre hay un equilibrio: cuanto más maquillaje se conserva, menos se parece a
 
 - Combínalo con `--eyes` para que los ojos traigan su sombra y su delineado, y con `--mouth` si la boca está pintada (por ejemplo, la boca cosida de una calavera).
 - `--color` no sirve para pintura de cara: iguala el color promedio, y con blanco y negro el promedio es gris; `--makeup` es el que conserva el dibujo.
-- Con `--face-mask normal` y maquillaje, la cara se pega con la máscara propia del programa (como con `--color`). Se aplica después de `--color` y antes de la oclusión y de `--eyes` / `--mouth` / `--nose` / `--remove-bangs`.
+- Con `--face-mask normal` y maquillaje, la cara se pega con la máscara propia del programa (como con `--color`). Se aplica después de `--color` y antes de la oclusión y de `--eyes` / `--mouth` / `--nose` / `--remove-bangs` / `--mejillas`.
 - El radio del desenfoque se ajusta en `core/Face_Swaper.py` con `SIGMA_MAQUILLAJE` (0.03 = unos 4 px del recorte). Más alto = más parecido y menos maquillaje.
 
 ```bash

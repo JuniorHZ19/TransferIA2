@@ -16,6 +16,18 @@ OJOS_106 = (range(33, 43), range(87, 97))
 BOCA_106 = range(52, 72)
 NARIZ_106 = range(72, 87)
 CEJAS_106 = (range(43, 52), range(97, 106))
+# Mejillas y pomulos, por lado: debajo del ojo (de afuera hacia adentro), costado de la nariz (de arriba hacia
+# abajo), comisura de la boca y contorno de la cara (de abajo hacia arriba)
+MEJILLAS_106 = (((35, 36, 33, 37), (76, 77, 78), 52, (15, 14, 13, 12, 11, 10, 9)),
+                ((93, 91, 87, 90), (82, 83, 84), 61, (31, 30, 29, 28, 27, 26, 25)))
+# Mejillas, en distancias entre ojos: cuanto se separa del ojo (parpado), de la nariz y de la boca, y cuanto se
+# mete hacia adentro desde el contorno (asi no toma el borde de la cara ni el fondo). El borde se difumina mas que
+# en ojos, boca y nariz (MEJILLAS_DIFUMINADO): la mejilla no tiene un borde natural donde esconder el corte
+MEJILLAS_OJO = 0.22
+MEJILLAS_NARIZ = 0.12
+MEJILLAS_BOCA = 0.12
+MEJILLAS_CONTORNO = 0.12
+MEJILLAS_DIFUMINADO = 0.3
 
 # Filtros de nitidez de la cara pegada (ver xseg.filtro_image); "None" = sin filtro
 FILTROS_NITIDEZ = ("natural", "strong", "adaptativo")
@@ -80,7 +92,7 @@ class Swapper_Faces:
         return  self.__class__._SWAPPER_MODEL
     
 
-    def cambiar_Faces(self,frame_dst,frame_src=None,index_src="0",index_dst="0",oclution=True,mode="None",genero="todos",ojos=False,mascara="amplia",caras_src=None,boca=False,color="ninguna",nariz=False,maquillaje=0.0,mejorar=0.0,devolver_mascara=False,mejorar_minimo=MINIMO_POR_DEFECTO,frente=False,oclusion_modo="adaptable"):
+    def cambiar_Faces(self,frame_dst,frame_src=None,index_src="0",index_dst="0",oclution=True,mode="None",genero="todos",ojos=False,mascara="amplia",caras_src=None,boca=False,color="ninguna",nariz=False,maquillaje=0.0,mejorar=0.0,devolver_mascara=False,mejorar_minimo=MINIMO_POR_DEFECTO,frente=False,oclusion_modo="adaptable",mejillas=False):
 
         '''
          caras_src: caras fuente ya preparadas (de una foto o de modelos .npy); si es None se detectan en frame_src.
@@ -113,7 +125,7 @@ class Swapper_Faces:
 
          fake_frame, alfa = self.cambiar_una(frame_dst, caras_src[indice_src], caras_dst[indice_dst], oclution, mode,
                                              ojos, mascara, boca, color, nariz, maquillaje, mejorar, devolver_mascara,
-                                             mejorar_minimo, frente, oclusion_modo)
+                                             mejorar_minimo, frente, oclusion_modo, mejillas=mejillas)
          if devolver_mascara:
             mascara_total = np.maximum(mascara_total, alfa)
 
@@ -123,7 +135,7 @@ class Swapper_Faces:
 
     def cambiar_una(self, frame, cara_src, cara_dst, oclution=True, mode="None", ojos=False, mascara="amplia",
                     boca=False, color="ninguna", nariz=False, maquillaje=0.0, mejorar=0.0, devolver_mascara=False,
-                    mejorar_minimo=MINIMO_POR_DEFECTO, frente=False, oclusion_modo="adaptable"):
+                    mejorar_minimo=MINIMO_POR_DEFECTO, frente=False, oclusion_modo="adaptable", mejillas=False):
 
         '''
          Cambia una sola cara: pegado (+ color + maquillaje) -> GPEN -> oclusion -> partes del destino.
@@ -162,9 +174,9 @@ class Swapper_Faces:
         elif solo_nitidez:
             fake_frame = self.aplicar_nitidez(frame, fake_frame, cara_dst, mode, zona)
 
-        if ojos or boca or nariz or frente:
+        if ojos or boca or nariz or frente or mejillas:
             fake_frame = self.conservar_partes(frame, fake_frame, cara_dst, ojos, boca, nariz, devolver_mascara=d,
-                                               frente=frente)
+                                               frente=frente, mejillas=mejillas)
             if d:
                 fake_frame, p = fake_frame
                 alfa = alfa * (1 - p)
@@ -334,7 +346,7 @@ class Swapper_Faces:
                                     oclution=True, mode="None", genero="todos", ojos=False, mascara="amplia",
                                     boca=False, color="ninguna", nariz=False, maquillaje=0.0, mejorar=0.0,
                                     devolver_mascara=False, mejorar_minimo=MINIMO_POR_DEFECTO, frente=False,
-                                    oclusion_modo="adaptable"):
+                                    oclusion_modo="adaptable", mejillas=False):
 
         '''
          Cambia las caras emparejando por identidad y no por posicion. "mapa" es {identidad_destino: indice_fuente},
@@ -357,7 +369,7 @@ class Swapper_Faces:
 
             fake_frame, alfa = self.cambiar_una(fake_frame, caras_src[indice_src], cara_dst, oclution, mode, ojos,
                                                 mascara, boca, color, nariz, maquillaje, mejorar, devolver_mascara,
-                                                mejorar_minimo, frente, oclusion_modo)
+                                                mejorar_minimo, frente, oclusion_modo, mejillas=mejillas)
             if devolver_mascara:
                 mascara_total = np.maximum(mascara_total, alfa)
 
@@ -433,7 +445,7 @@ class Swapper_Faces:
 
     @staticmethod
     def conservar_partes(frame_original, fake_frame, cara, ojos=True, boca=False, nariz=False, devolver_mascara=False,
-                         frente=False):
+                         frente=False, mejillas=False):
 
         '''
          Devuelve fake_frame con los ojos, la boca y/o la nariz de frame_original (el destino): la cara se cambia
@@ -444,11 +456,13 @@ class Swapper_Faces:
         (kps: ojos, punta de la nariz y comisuras de la boca).
         "frente": la frente del destino, desde un poco arriba de las cejas (ver mascara_frente). Sirve cuando la
         fuente tiene cerquillo: inswapper dibuja algo de ese pelo sobre la frente y aqui se quita.
+        "mejillas": las mejillas y los pomulos del destino, entre el ojo, la nariz, la boca y el contorno de la cara
+        (ver mejillas_106), con un borde mas difuminado que el resto.
         Con devolver_mascara=True devuelve (frame, mascara): cuanto de cada pixel vuelve del destino (0 a 1).
         '''
 
         dist_ojos = float(np.linalg.norm(cara.kps[1] - cara.kps[0]))
-        if dist_ojos < 2 or not (ojos or boca or nariz or frente):
+        if dist_ojos < 2 or not (ojos or boca or nariz or frente or mejillas):
             return (fake_frame, 0.0) if devolver_mascara else fake_frame
 
         # Formas a pintar en la mascara: ("poligono", puntos) o ("elipse", centro, ejes, angulo), en pixeles del frame
@@ -498,6 +512,12 @@ class Swapper_Faces:
                 (cx, cy), radio = forma[1], max(forma[2]) + 1
                 cajas.append((cx - radio, cy - radio, cx + radio, cy + radio))
         cajas = [(x1 - margen, y1 - margen, x2 + margen + 1, y2 + margen + 1) for x1, y1, x2, y2 in cajas]
+        zonas_mejillas = Swapper_Faces.mejillas_106(cara, dist_ojos) if mejillas else []
+        k_mejillas = max(3, int(dist_ojos * MEJILLAS_DIFUMINADO) | 1)
+        margen_mejillas = 2 * (k_mejillas // 2) + 2
+        for zona in zonas_mejillas:
+            (x1, y1), (x2, y2) = zona.min(0), zona.max(0)
+            cajas.append((x1 - margen_mejillas, y1 - margen_mejillas, x2 + margen_mejillas + 1, y2 + margen_mejillas + 1))
         rectangulo = None
         if frente:
             mascara_frente, rectangulo = Swapper_Faces.mascara_frente((alto, ancho), cara, devolver_rectangulo=True)
@@ -525,6 +545,10 @@ class Swapper_Faces:
                 centro = (forma[1][0] - x1, forma[1][1] - y1)
                 cv2.ellipse(mascara, centro, forma[2], forma[3], 0, 360, 1.0, -1)
         mascara = cv2.GaussianBlur(mascara, (k, k), 0)
+        if zonas_mejillas:
+            mascara_mejillas = np.zeros_like(mascara)
+            cv2.fillPoly(mascara_mejillas, [zona - desplazamiento for zona in zonas_mejillas], 1.0)
+            mascara = np.maximum(mascara, cv2.GaussianBlur(mascara_mejillas, (k_mejillas, k_mejillas), 0))
 
         if frente:
             # La frente del destino casi nunca tiene el tono de la cara que dibuja inswapper: se corrige antes
@@ -542,6 +566,38 @@ class Swapper_Faces:
         completa[y1:y2, x1:x2] = mascara[..., 0]
         return resultado, completa
 
+
+    @staticmethod
+    def mejillas_106(cara, dist_ojos):
+        '''
+         Contorno de cada mejilla con pomulo (lista de poligonos int32 en pixeles del frame): debajo del ojo, al
+        costado de la nariz, junto a la comisura de la boca y por dentro del contorno de la cara, separado de cada
+        uno lo que dicen las constantes MEJILLAS_*. Sin 106 puntos, una elipse por lado entre el ojo y la comisura.
+        '''
+        unidad = lambda v: v / max(float(np.linalg.norm(v)), 1e-6)
+        ojos_centro = (cara.kps[0] + cara.kps[1]) / 2
+        boca_centro = (cara.kps[3] + cara.kps[4]) / 2
+        abajo = unidad(boca_centro - ojos_centro)
+        puntos = cara.get("landmark_2d_106")
+        zonas = []
+        if puntos is not None:
+            centro_cara = puntos.mean(0)
+            for ojo, nariz, comisura, contorno in MEJILLAS_106:
+                bajo_ojo = puntos[list(ojo)] + abajo * MEJILLAS_OJO * dist_ojos
+                costado = puntos[list(nariz)]
+                costado = costado + np.array([unidad(p - cara.kps[2]) for p in costado]) * MEJILLAS_NARIZ * dist_ojos
+                junto_boca = puntos[comisura] + unidad(puntos[comisura] - boca_centro) * MEJILLAS_BOCA * dist_ojos
+                borde = puntos[list(contorno)]
+                borde = borde + np.array([unidad(centro_cara - p) for p in borde]) * MEJILLAS_CONTORNO * dist_ojos
+                zonas.append(np.vstack([bajo_ojo, costado, junto_boca[None], borde]).astype(np.int32))
+        else:
+            costado = unidad(cara.kps[1] - cara.kps[0])
+            angulo = float(np.degrees(np.arctan2(costado[1], costado[0])))
+            for ojo, comisura, lado in ((0, 3, -1), (1, 4, 1)):
+                centro = cara.kps[ojo] * 0.45 + cara.kps[comisura] * 0.55 + costado * lado * 0.25 * dist_ojos
+                zonas.append(cv2.ellipse2Poly(tuple(int(v) for v in centro),
+                                              (int(dist_ojos * 0.38), int(dist_ojos * 0.5)), int(angulo), 0, 360, 10))
+        return zonas
 
     @staticmethod
     def mascara_frente(tamano, cara, devolver_rectangulo=False):

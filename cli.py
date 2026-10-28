@@ -195,6 +195,11 @@ def build_parser():
              "destino",
     )
     process_parser.add_argument(
+        "--mejillas",
+        action="store_true",
+        help="cambia el rostro completo pero conserva las mejillas y los pomulos originales del destino",
+    )
+    process_parser.add_argument(
         "--makeup",
         type=_fuerza,
         default=0.0,
@@ -413,6 +418,7 @@ def _swap_frame(swapper, caras_src, frame, args):
         boca=args.mouth,
         nariz=args.nose,
         frente=args.remove_bangs,
+        mejillas=args.mejillas,
         mascara=args.face_mask,
         color=args.color,
         maquillaje=args.makeup,
@@ -496,6 +502,7 @@ class _ModoIdentidad:
             boca=self.args.mouth,
             nariz=self.args.nose,
             frente=self.args.remove_bangs,
+            mejillas=self.args.mejillas,
             mascara=self.args.face_mask,
             color=self.args.color,
             maquillaje=self.args.makeup,
@@ -545,7 +552,7 @@ def _firma_opciones(args):
         firma.pop("oclusion_modo", None)  # "debil" es el de antes: los videos empezados antes siguen
     if not args.occlusion and args.occlusion_mode != "None":
         firma["nitidez_sin_oclusion"] = True  # antes el filtro sin --occlusion no se aplicaba: no mezclar videos
-    firma["deteccion"] = 2  # caras inclinadas sin saltos (mezcla entre 10 y 20 grados): otros puntos
+    firma["deteccion"] = 3  # 2: caras inclinadas sin saltos (mezcla entre 10 y 20 grados); 3: caras volteadas
     if not firma.get("sin_inclinadas"):
         firma.pop("sin_inclinadas", None)
     if args.asignacion == "identidad":
@@ -555,6 +562,8 @@ def _firma_opciones(args):
         firma.pop("personas_max", None)
     if not firma.get("remove_bangs"):
         firma.pop("remove_bangs", None)  # asi los videos empezados antes de esta opcion se pueden continuar
+    if not firma.get("mejillas"):
+        firma.pop("mejillas", None)
     return firma
 
 
@@ -872,7 +881,7 @@ _CONFIG_A_OPCION = {
     "personas_fps": "personas_fps", "personas_max": "personas_max",
     "indices_fuente": "source_index", "indices_destino": "target_index",
     "mascara": "face_mask", "color": "color",
-    "ojos": "eyes", "boca": "mouth", "nariz": "nose", "frente": "remove_bangs",
+    "ojos": "eyes", "boca": "mouth", "nariz": "nose", "frente": "remove_bangs", "mejillas": "mejillas",
     "zip": "zip", "zip_conservar": "zip_conservar",
     "maquillaje": "makeup", "oclusion": "occlusion", "oclusion_modo": "oclusion_modo", "filtro": "occlusion_mode",
     "minimo_mejora": "enhance_min_size", "hilos": "threads",

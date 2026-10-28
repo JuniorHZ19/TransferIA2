@@ -6,6 +6,8 @@ import subprocess
 import concurrent.futures
 import cv2
 
+from core.Face_Analyzer import Memoria_Orientacion, con_memoria
+
 # Formato del video temporal mientras se procesa. Los dos aguantan cortes: si el proceso se interrumpe, lo ya
 # escrito se puede reproducir y se puede continuar desde ahi (un MP4 normal quedaria inservible).
 #   mkv      Matroska
@@ -462,6 +464,8 @@ def procesar_video(destino, salida, preparar, hilos=2, contenedor="mkv", codec="
         leido_todo = False
         maximo_pendientes = max(2, hilos * 2)
         ultimo_guardado = time.time()
+        # Hacia donde estaba cada cara en los frames anteriores, para las caras dudosas (ver Face_Analyzer)
+        memoria = Memoria_Orientacion(fps)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=hilos) as ejecutor:
             try:
@@ -473,7 +477,10 @@ def procesar_video(destino, salida, preparar, hilos=2, contenedor="mkv", codec="
                         if not ok:
                             leido_todo = True
                             break
-                        pendientes[numero] = ejecutor.submit(preparar(frame, inicio + numero))
+                        # preparar() tambien puede detectar caras (modo identidad, en este hilo), y la tarea en otro
+                        # hilo: las dos usan la memoria como este frame
+                        tarea = con_memoria(memoria, numero, lambda: preparar(frame, inicio + numero))()
+                        pendientes[numero] = ejecutor.submit(con_memoria(memoria, numero, tarea))
                         numero += 1
                     if detenido:
                         leido_todo = True
