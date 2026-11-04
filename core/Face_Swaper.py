@@ -53,6 +53,13 @@ SIGMA_MAQUILLAJE = 0.03
 # "suave" iguala el tono (A, B) y la luz media; "completa" ademas ajusta el contraste de la luz.
 COLORES = ("ninguna", "suave", "completa")
 
+# Caras de perfil: el recorte de inswapper se centra en los 5 puntos (ojos, nariz, boca), que de perfil quedan del
+# lado de adelante; la mejilla y la mandibula hacia la oreja caen fuera de la zona pegada y conservaban el tono del
+# destino, con un corte en medio de la mejilla. Dentro del contorno de la cara (106 puntos) esa parte se lleva al
+# tono de la cara nueva (ver completar_perfil). PERFIL_ALCANCE: cuanto se difunde el tono, en lados del recorte
+COMPLETAR_PERFIL = True
+PERFIL_ALCANCE = 0.25
+
 # Zona de la cara cambiada que se pega sobre el destino: (recorte del borde, difuminado), en fraccion del
 # recorte alineado del modelo. "normal" es el pegado original de insightface (deja mas contorno del destino);
 # "amplia" y "maxima" cubren mas mejillas, menton y frente, asi el resultado se parece mas a la fuente.
@@ -149,11 +156,17 @@ class Swapper_Faces:
         # Filtro de nitidez sin oclusion: se aplica dentro de la zona pegada (con oclusion, dentro de su mascara)
         solo_nitidez = not oclution and mode in FILTROS_NITIDEZ
 
-        fake_frame = self.pegar_cara(frame, cara_src, cara_dst, mascara, color, maquillaje,
-                                     devolver_zona=d or solo_nitidez)
-        if d or solo_nitidez:
-            fake_frame, zona = fake_frame
-            alfa = zona if d else None
+        fake_frame, zona = self.pegar_cara(frame, cara_src, cara_dst, mascara, color, maquillaje, devolver_zona=True)
+        alfa = zona if d else None
+        # La mascara de la cara (XSeg) se calcula una vez: la usan completar_perfil y la oclusion
+        mascara_cara = None
+        if oclution == True and COMPLETAR_PERFIL:
+            with self.__class__._LOCK:
+                mascara_cara = self.__class__._XSEG_MODEL.get_complete_mask(frame, cara_dst)
+            if mascara_cara is not None:
+                fake_frame, extra = self.completar_perfil(frame, fake_frame, cara_dst, zona, mascara_cara)
+                if d and extra is not None:
+                    alfa = np.maximum(alfa, extra)
 
         if mejorar:
             fake_frame = self.mejorar_cara(fake_frame, cara_dst, mejorar, devolver_mascara=d, minimo=mejorar_minimo)
@@ -167,7 +180,8 @@ class Swapper_Faces:
                 fake_frame = self.__class__._XSEG_MODEL.frame_with_occlusion(frame=frame, fake_frame=fake_frame,
                                                                               face=cara_dst, mode=mode,
                                                                               devolver_mascara=d,
-                                                                              modo_oclusion=oclusion_modo)
+                                                                              modo_oclusion=oclusion_modo,
+                                                                              mascara=mascara_cara)
             if d:
                 fake_frame, m = fake_frame
                 alfa = alfa * m
@@ -243,6 +257,73 @@ class Swapper_Faces:
 
         resultado = zona * cara_fake.astype(np.float32) + (1 - zona) * frame.astype(np.float32)
         return (resultado.astype(np.uint8), zona[..., 0]) if devolver_zona else resultado.astype(np.uint8)
+
+
+    @staticmethod
+    def completar_perfil(frame, fake_frame, cara, zona, mascara_cara):
+
+        '''
+         Lleva al tono de la cara nueva la parte de la cara que quedo fuera de la zona pegada (de perfil, la mejilla
+        y la mandibula hacia la oreja; de frente casi nada). El tono es la diferencia LAB (cara nueva - destino)
+        medida dentro de la zona pegada y difundida hacia afuera con un desenfoque normalizado; se aplica al
+        destino (la luz por proporcion, el color sumando), asi la textura sigue siendo la del destino. Solo dentro
+        de la mascara de la cara (XSeg, 0 a 255, la misma de la oclusion): no tiñe el fondo, el pelo, las orejas
+        ni lo que tape la cara.
+        Devuelve (frame, extra): extra es cuanto se cambio cada pixel (0 a 1) o None si no se cambio nada.
+        '''
+
+        alto, ancho = frame.shape[:2]
+        # Lado del recorte alineado de inswapper, en pixeles del frame
+        M = face_align.estimate_norm(cara.kps, 128)
+        lado = 128.0 / np.sqrt(abs(np.linalg.det(M[:, :2])))
+        x1, y1, w, h = cv2.boundingRect((mascara_cara > 12).astype(np.uint8))
+        x2, y2 = x1 + w, y1 + h
+        if w < 8 or h < 8:
+            return fake_frame, None
+
+        contorno = mascara_cara[y1:y2, x1:x2].astype(np.float32) / 255.0
+        z = zona[y1:y2, x1:x2]
+        falta = contorno * (1 - z)
+        if falta.max() < 0.05:
+            return fake_frame, None
+
+        # Se mide en un recorte reducido (el tono es de baja frecuencia): el lado de la cara a ~64 px
+        esc = min(1.0, 64.0 / lado)
+        chico = (max(4, int((x2 - x1) * esc)), max(4, int((y2 - y1) * esc)))
+        lab_fake = cv2.cvtColor(cv2.resize(fake_frame[y1:y2, x1:x2], chico, interpolation=cv2.INTER_AREA),
+                                cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab_dst = cv2.cvtColor(cv2.resize(frame[y1:y2, x1:x2], chico, interpolation=cv2.INTER_AREA),
+                               cv2.COLOR_BGR2LAB).astype(np.float32)
+        diferencia = lab_fake - lab_dst
+        # Solo donde la cara nueva esta entera y dentro de la cara; sin diferencias enormes (una mano o un objeto
+        # tapado por la cara nueva, que despues devuelve la oclusion)
+        pesos = ((cv2.resize(z, chico) > 0.9) & (cv2.resize(contorno, chico) > 0.5)
+                 & (np.abs(diferencia).max(2) < 45)).astype(np.float32)
+        if pesos.sum() < 10:
+            return fake_frame, None
+        sigma = max(1.0, lado * esc * PERFIL_ALCANCE)
+        suma = np.maximum(cv2.GaussianBlur(pesos, (0, 0), sigma), 1e-4)
+
+        def difundir(x):
+            return cv2.GaussianBlur(x * pesos, (0, 0), sigma) / suma
+
+        # La luz se corrige por proporcion (lo oscuro, como la barba o las cejas, sigue oscuro; sumando se
+        # aclaraba) y el color (A, B) sumando la diferencia
+        proporcion = np.clip(difundir(lab_fake[..., 0]) / np.maximum(difundir(lab_dst[..., 0]), 1.0), 0.5, 2.0)
+        tono = np.dstack([proporcion, difundir(diferencia[..., 1]), difundir(diferencia[..., 2])])
+        tono = cv2.resize(tono, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR)
+
+        lab = cv2.cvtColor(fake_frame[y1:y2, x1:x2], cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab[..., 0] *= 1 + (tono[..., 0] - 1) * falta
+        lab[..., 1:] += tono[..., 1:] * falta[..., None]
+        resultado = fake_frame.copy()
+        # Ida y vuelta a LAB redondea +-1: solo se escribe donde de verdad cambia
+        cambia = falta > 0.004
+        resultado[y1:y2, x1:x2][cambia] = cv2.cvtColor(np.clip(np.rint(lab), 0, 255).astype(np.uint8),
+                                                       cv2.COLOR_LAB2BGR)[cambia]
+        extra = np.zeros((alto, ancho), np.float32)
+        extra[y1:y2, x1:x2] = falta
+        return resultado, extra
 
 
     @staticmethod

@@ -14,6 +14,7 @@ Transfer-IA es una aplicación de cambio facial que utiliza inteligencia artific
 - Arrastrar y soltar archivos
 - Barra de progreso para seguimiento del proceso
 - Detección de caras inclinadas a la izquierda, a la derecha y boca abajo
+- Caras de perfil sin corte de tono en la mejilla, con la oclusión ajustada al perfil (ver [Caras de perfil](#caras-de-perfil))
 - Asignación de caras por identidad: cada persona del video conserva su cara aunque cambie de posición
 - Filtro por género de las caras destino (todos, mujer u hombre)
 - Opción para conservar los ojos del destino (`--eyes`)
@@ -355,6 +356,25 @@ Medido con caras de IA (cara girada y medio tapada por un celular, una mano, un 
 No resuelve los ojos tapados (gorro, visera): sin ojos el detector no encuentra la cara. Los videos a medias empezados antes de este cambio no se pueden continuar: hay que empezarlos de cero.
 
 Ajustes en el código: `VERIFICAR_VOLTEO_BAJO`, `MARGEN_VOLTEO`, `MARGEN_VOLTEO_VIDEO`, `SEGUNDOS_MEMORIA`, `PARECIDO_MEMORIA` y `GIRO_MEMORIA` en `core/Face_Analyzer.py`.
+
+#### Caras de perfil
+
+El modelo que cambia la cara (inswapper) solo dibuja dentro de un cuadrado que se ubica con los ojos, la nariz y la boca. De perfil esos puntos quedan del lado de adelante de la cabeza y el cuadrado no llega a la mejilla ni a la mandíbula del lado de la oreja: esa parte quedaba con la piel del destino y se veía un corte de tono en medio de la mejilla. Ahora, automáticamente (con la oclusión activada, que es lo normal):
+
+- **La mejilla de atrás toma el tono de la cara nueva.** Se mide la diferencia de luz y color dentro del cuadrado y se extiende, suave, hacia la oreja. La textura sigue siendo la del destino y lo oscuro (barba, cejas) sigue oscuro. Solo se aplica donde la máscara de la oclusión dice que hay cara: no tiñe el fondo, el pelo, las orejas ni lo que tape la cara.
+- **La máscara de la oclusión mira mejor la cara de perfil:** su recorte se corre un poco hacia la oreja (más cuanto más girada está la cabeza). De frente no cambia.
+
+Medido con 100 caras sintéticas con la segmentación real de la cara (Microsoft FaceSynthetics):
+
+| Giro de la cabeza | Corte de tono en la mejilla (antes → ahora) | Cara sin cambiar |
+|---|---|---|
+| Frente (0-20°) | 1,62 → **1,39** | 19,6 % → **18,6 %** |
+| Perfil (40-60°) | 2,33 → **1,39** | 20,4 % → **19,1 %** |
+| Perfil (60-90°) | 1,20 → **1,06** | 21,6 % → **18,6 %** |
+
+Con un celular en la oreja, una mano en la mejilla o un micrófono delante de la boca (153 casos), el objeto queda igual que antes: cambia menos del 2,5 % de sus píxeles. No es más lento: la máscara de la cara se calcula una sola vez y la usan los dos pasos. Los videos a medias empezados antes de este cambio no se pueden continuar: hay que empezarlos de cero.
+
+Ajustes en el código: `COMPLETAR_PERFIL` y `PERFIL_ALCANCE` en `core/Face_Swaper.py`, `CORRIMIENTO_PERFIL` en `core/xseg.py`.
 
 ### Caras en primer plano
 

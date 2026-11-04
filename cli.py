@@ -552,7 +552,8 @@ def _firma_opciones(args):
         firma.pop("oclusion_modo", None)  # "debil" es el de antes: los videos empezados antes siguen
     if not args.occlusion and args.occlusion_mode != "None":
         firma["nitidez_sin_oclusion"] = True  # antes el filtro sin --occlusion no se aplicaba: no mezclar videos
-    firma["deteccion"] = 3  # 2: caras inclinadas sin saltos (mezcla entre 10 y 20 grados); 3: caras volteadas
+    firma["deteccion"] = 4  # 2: caras inclinadas sin saltos (mezcla entre 10 y 20 grados); 3: caras volteadas;
+    # 4: caras de perfil (tono de la mejilla y mascara corrida hacia la oreja)
     if not firma.get("sin_inclinadas"):
         firma.pop("sin_inclinadas", None)
     if args.asignacion == "identidad":

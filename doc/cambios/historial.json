@@ -177,5 +177,20 @@
    "README.md"
   ],
   "archivo": "2026-10-28-caras-volteadas-y-mejillas.docx"
+ },
+ {
+  "fecha": "2026-11-02",
+  "titulo": "Caras de perfil",
+  "tipo": "Corrección",
+  "resumen": "Con la cara de perfil, la mejilla y la mandíbula del lado de la oreja toman el tono de la cara nueva (sin corte en medio de la mejilla), y la máscara de la oclusión se corre hacia la oreja para marcar mejor la cara muy girada.",
+  "porque": "inswapper solo dibuja dentro de un cuadrado alineado con ojos, nariz y boca; de perfil ese cuadrado se queda adelante y no llega a la mejilla de atrás.",
+  "archivos_tocados": [
+   "core/Face_Swaper.py",
+   "core/xseg.py",
+   "cli.py",
+   "app.py",
+   "README.md"
+  ],
+  "archivo": "2026-11-02-caras-de-perfil.docx"
  }
 ]

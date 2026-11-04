@@ -21,6 +21,12 @@ FFHQ_TEMPLATE = np.array([
 # natural / strong: fuerza fija del enfoque (mascara de enfoque sobre la luz).
 NITIDEZ_FIJA = {"natural": 0.8, "strong": 1.6}
 
+# Caras de perfil: los 5 puntos quedan del lado de adelante de la cabeza y el recorte alineado dejaba la mejilla
+# hacia la oreja en el borde (XSeg la marcaba peor). El recorte se corre hacia la oreja esta fraccion de su lado
+# por sin(yaw). Medido con 100 caras sinteticas: de 60 a 90 grados la mascara acierta mas (IoU 0.78 -> 0.82) y
+# de frente no cambia (sin(yaw) ~ 0); 0.15 o mas ya empeora algunas caras
+CORRIMIENTO_PERFIL = 0.1
+
 # Modo de la oclusion: cuanto se respeta lo que tapa la cara (pelo, manos, objetos) en el borde difuminado.
 #   debil      la mascara difuminada tal cual (como antes): en el borde de un objeto queda hasta ~46 % de cara
 #              y dentro del objeto un poco (7-16 %), porque el difuminado "derrama" cara hacia el objeto
@@ -159,6 +165,10 @@ class DFL_XSeg_Model:
         Devuelve el recorte alineado y la matriz afin usada.
         """
         dst = ((FFHQ_TEMPLATE - 0.5) * margen + 0.5) * size
+        pose = face.get("pose") if hasattr(face, "get") else None
+        if CORRIMIENTO_PERFIL and pose is not None:
+            # yaw > 0: mira hacia la derecha de la cara alineada, la oreja queda a la izquierda
+            dst = (dst + [CORRIMIENTO_PERFIL * size * np.sin(np.radians(float(pose[1]))), 0]).astype(np.float32)
         M, _ = cv2.estimateAffinePartial2D(face.kps.astype(np.float32), dst,
                                            method=cv2.RANSAC, ransacReprojThreshold=100)
         crop = cv2.warpAffine(frame, M, (size, size),
@@ -260,18 +270,19 @@ class DFL_XSeg_Model:
         
 
     def frame_with_occlusion(self, frame, fake_frame, face, mode="natural", devolver_mascara=False,
-                             modo_oclusion="debil"):
+                             modo_oclusion="debil", mascara=None):
         """
         Proceso mejorado para una fusión suave entre la cara fake y el fondo,
         aplicando nitidez solo a la cara fake.
         Con devolver_mascara=True devuelve (resultado, mascara): cuanto de cada pixel viene de fake_frame
         (0 a 1, del tamaño del frame), o 0.0 / 1.0 si se devolvio todo el frame o todo el fake
         modo_oclusion: debil, adaptable o fuerte (ver MODOS_OCLUSION)
+        mascara: la de get_complete_mask(frame, face) si ya se calculo (asi no se infiere dos veces)
         """
-        resultado, mascara = self._oclusion(frame, fake_frame, face, mode, modo_oclusion)
+        resultado, mascara = self._oclusion(frame, fake_frame, face, mode, modo_oclusion, mascara)
         return (resultado, mascara) if devolver_mascara else resultado
 
-    def _oclusion(self, frame, fake_frame, face, mode, modo_oclusion="debil"):
+    def _oclusion(self, frame, fake_frame, face, mode, modo_oclusion="debil", mascara=None):
         try:
             # Asegurar que los frames son arrays de numpy con el tipo correcto
             frame = np.asarray(frame).astype(np.uint8)
@@ -282,7 +293,8 @@ class DFL_XSeg_Model:
                 return frame, 0.0
             
             # 1. Obtener la máscara base
-            mascara = self.get_complete_mask(frame, face)
+            if mascara is None:
+                mascara = self.get_complete_mask(frame, face)
             if mascara is None:
                 print("Warning: No se pudo generar la máscara")
                 return self.filtro_image(fake_frame, mode, face=face), 1.0

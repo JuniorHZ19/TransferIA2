@@ -2378,8 +2378,9 @@ class FaceSwapApp:
             # solo si esta marcada: los videos empezados antes de esta opcion se siguen pudiendo continuar
             **({"frente": True} if self.var_frente.get() else {}),
             **({"mejillas": True} if self.var_mejillas.get() else {}),
-            # 2: caras inclinadas sin saltos (mezcla gradual entre 10 y 20 grados); 3: caras volteadas
-            "deteccion": 3,
+            # 2: caras inclinadas sin saltos (mezcla gradual entre 10 y 20 grados); 3: caras volteadas;
+            # 4: caras de perfil (tono de la mejilla y mascara corrida hacia la oreja)
+            "deteccion": 4,
             **({"sin_inclinadas": True} if not self.caras_inclinadas_var.get() else {}),
             # identidad: las personas salen del analisis previo (antes, por orden de aparicion): no mezclar
             **({"personas": "analisis", "personas_fps": self.personas_fps_var.get(),
