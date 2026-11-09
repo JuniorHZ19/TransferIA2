@@ -192,5 +192,38 @@
    "README.md"
   ],
   "archivo": "2026-11-02-caras-de-perfil.docx"
+ },
+ {
+  "fecha": "2026-11-03",
+  "titulo": "Color de ojos",
+  "tipo": "Nueva función",
+  "resumen": "Nueva opción --color-ojos (y «Color de ojos» en la interfaz): el iris toma el color de los ojos de la fuente o uno elegido (azul, verde, miel, gris, marrón o #RRGGBB), conservando las vetas; no tiñe ojos cerrados, tapados ni muy de perfil. Los modelos .npy guardan el color del iris.",
+  "porque": "inswapper solo usa el vector de identidad de la fuente, que no guarda el color de los ojos, y dibuja el iris borroso en 128 px.",
+  "archivos_tocados": [
+   "core/Iris.py",
+   "core/Face_Swaper.py",
+   "core/Modelo_Cara.py",
+   "cli.py",
+   "app.py",
+   "core/Configuraciones.py",
+   "README.md"
+  ],
+  "archivo": "2026-11-03-color-de-ojos.docx"
+ },
+ {
+  "fecha": "2026-11-04",
+  "titulo": "Detalle de piel",
+  "tipo": "Nueva función",
+  "resumen": "Nueva opción --detalle-piel (deslizador «Detalle de piel» en la nueva fila «De la fuente»): las pecas, lunares, arrugas finas y poros de la foto fuente pasan al resultado en su lugar de la cara, sin sus sombras (costado de la nariz, surcos, ojeras) ni la barba de un hombre.",
+  "porque": "inswapper solo usa el vector de identidad de la fuente y dibuja la cara a 128 px: los detalles chicos de la piel no pasan.",
+  "archivos_tocados": [
+   "core/Piel.py",
+   "core/Face_Swaper.py",
+   "cli.py",
+   "app.py",
+   "core/Configuraciones.py",
+   "README.md"
+  ],
+  "archivo": "2026-11-04-detalle-de-piel.docx"
  }
 ]

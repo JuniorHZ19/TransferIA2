@@ -9,6 +9,7 @@ from core.Imagenes import leer, guardar
 import numpy as np
 from insightface.app.common import Face
 from core.Identidades import Registro_Identidades
+from core import Iris
 
 EXTENSIONES_IMAGEN = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 EXTENSIONES_VIDEO = (".mp4", ".avi", ".mkv", ".mov", ".webm")
@@ -199,6 +200,10 @@ class Modelo_Cara:
             "fotos": sorted({caras[i][2] for i in usadas if caras[i][3] is None}),
             "similitud_promedio": round(sim_promedio, 3),
         }
+        # Color del iris (LAB) de las caras usadas con los ojos abiertos, para --color-ojos fuente
+        iris = [caras[i][0].get("color_iris") for i in usadas if caras[i][0].get("color_iris") is not None]
+        if iris:
+            datos["color_iris"] = [round(float(v), 1) for v in np.median(iris, 0)]
         # Por video: cuantos frames aportaron al menos una cara usada
         frames_video = {}
         for video, _ in {(caras[i][3], caras[i][2]) for i in usadas if caras[i][3] is not None}:
@@ -233,6 +238,8 @@ class Modelo_Cara:
 
         def agregar(imagen, origen, video=None):
             encontradas = [c for c in analizador.obtener_caras(imagen) if registro.calidad_cara(c) > 0]
+            for c in encontradas:
+                c["color_iris"] = Iris.color_iris(imagen, c)  # el vector no lo tiene: para --color-ojos fuente
             caras.extend((c, recortar(imagen, c), origen, video) for c in encontradas)
             return len(encontradas)
 
@@ -436,6 +443,11 @@ class Modelo_Cara:
                 for n, p, v in zip(nombres, pesos, vectores)
             ],
         }
+        # Color del iris: promedio de los modelos que lo tienen, con el mismo peso que el vector
+        iris = [(d["color_iris"], p) for d, p in zip(datos_modelos, pesos) if isinstance(d.get("color_iris"), list)]
+        if iris:
+            datos["color_iris"] = [round(float(v), 1) for v in np.average([c for c, _ in iris], axis=0,
+                                                                         weights=[p for _, p in iris])]
         with open(base + ".json", "w", encoding="utf-8") as archivo:
             json.dump(datos, archivo, ensure_ascii=False, indent=2)
 
@@ -461,8 +473,8 @@ class Modelo_Cara:
     def cargar(ruta):
 
         '''
-         Carga un .npy y lo devuelve como una cara fuente que inswapper puede usar (solo lleva el vector).
-        Sin pickle: un .npy con objetos de Python se rechaza.
+         Carga un .npy y lo devuelve como una cara fuente que inswapper puede usar (solo lleva el vector, y el
+        color del iris si el .json lo tiene). Sin pickle: un .npy con objetos de Python se rechaza.
         '''
 
         if not os.path.isfile(ruta):
@@ -481,7 +493,11 @@ class Modelo_Cara:
             print(f"Aviso: {os.path.basename(ruta)} se creo con {datos['reconocimiento']} y ahora se usa "
                   f"{RECONOCIMIENTO}; conviene volver a crearlo")
 
-        return Face(embedding=vector / np.linalg.norm(vector))
+        cara = Face(embedding=vector / np.linalg.norm(vector))
+        iris = datos.get("color_iris")
+        if isinstance(iris, list) and len(iris) == 3 and all(isinstance(v, (int, float)) for v in iris):
+            cara["color_iris"] = np.asarray(iris, np.float32)
+        return cara
 
 
     @staticmethod

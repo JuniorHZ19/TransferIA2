@@ -11,7 +11,7 @@ from core.Identidades import Registro_Identidades
 from core.Modelo_Cara import Modelo_Cara, FPS_VIDEO, MAX_FRAMES_VIDEO, CARPETA_CARAS
 from core.Mejorador import validar_minimo, MINIMO_POR_DEFECTO
 from core.Proceso_Carpeta import imagenes_carpeta, carpeta_salida, procesar_carpeta, SUFIJO_SALIDA
-from core import Configuraciones
+from core import Configuraciones, Iris
 from core.Empaquetar import empaquetar, ruta_zip, disponible as zip_disponible
 from core.Personas import (Personas, validar_fps, validar_maximo, FPS as PERSONAS_FPS,
                            MAX_FRAMES as PERSONAS_MAX)
@@ -55,6 +55,14 @@ def _minimo_gpen(valor):
         return validar_minimo(valor)
     except ValueError as error:
         raise argparse.ArgumentTypeError(str(error))
+
+
+def _color_ojos(valor):
+    """Valor de --color-ojos: ninguno, fuente, un color con nombre o #RRGGBB"""
+    try:
+        return Iris.validar(valor)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"{error}: {valor}")
 
 
 def build_parser():
@@ -198,6 +206,22 @@ def build_parser():
         "--mejillas",
         action="store_true",
         help="cambia el rostro completo pero conserva las mejillas y los pomulos originales del destino",
+    )
+    process_parser.add_argument(
+        "--color-ojos",
+        type=_color_ojos,
+        default="ninguno",
+        metavar="COLOR",
+        help="cambia el color del iris: fuente (el de la foto o el modelo fuente), " + ", ".join(Iris.COLORES)
+             + " o un color #RRGGBB; tambien con --eyes (colorea los ojos del destino). Por defecto: ninguno",
+    )
+    process_parser.add_argument(
+        "--detalle-piel",
+        type=_fuerza,
+        default=0.0,
+        metavar="FUERZA",
+        help="lleva al destino el detalle de la piel de la foto fuente (pecas, lunares, arrugas, poros), de 0 a 1; "
+             "necesita una foto fuente (no un modelo .npy). Por defecto: 0 (desactivado)",
     )
     process_parser.add_argument(
         "--makeup",
@@ -419,6 +443,8 @@ def _swap_frame(swapper, caras_src, frame, args):
         nariz=args.nose,
         frente=args.remove_bangs,
         mejillas=args.mejillas,
+        color_ojos=args.color_ojos,
+        detalle_piel=args.detalle_piel,
         mascara=args.face_mask,
         color=args.color,
         maquillaje=args.makeup,
@@ -503,6 +529,8 @@ class _ModoIdentidad:
             nariz=self.args.nose,
             frente=self.args.remove_bangs,
             mejillas=self.args.mejillas,
+            color_ojos=self.args.color_ojos,
+            detalle_piel=self.args.detalle_piel,
             mascara=self.args.face_mask,
             color=self.args.color,
             maquillaje=self.args.makeup,
@@ -565,6 +593,10 @@ def _firma_opciones(args):
         firma.pop("remove_bangs", None)  # asi los videos empezados antes de esta opcion se pueden continuar
     if not firma.get("mejillas"):
         firma.pop("mejillas", None)
+    if firma.get("color_ojos") == "ninguno":
+        firma.pop("color_ojos", None)
+    if not firma.get("detalle_piel"):
+        firma.pop("detalle_piel", None)
     return firma
 
 
@@ -686,7 +718,7 @@ def _cargar_caras_fuente(swapper, source):
     source_img = leer(source_path)
     if source_img is None:
         raise ValueError(f"No se pudo leer la imagen fuente: {source_path}")
-    caras = swapper.detectar_caras(source_img)
+    caras = swapper.detectar_caras_fuente(source_img)
     if not caras:
         raise ValueError("No se detecto ninguna cara en la imagen fuente")
     return caras
@@ -837,6 +869,17 @@ def run_cli(args):
         Analyzer_Faces.CARAS_INCLINADAS = not args.sin_inclinadas
         swapper = Swapper_Faces(model_path)
         caras_src = _cargar_caras_fuente(swapper, args.source)
+        if args.color_ojos == "fuente":
+            sin_iris = [str(i) for i, c in enumerate(caras_src) if c.get("color_iris") is None]
+            if len(sin_iris) == len(caras_src):
+                print("Aviso: --color-ojos fuente: no se pudo medir el color de ojos de la fuente (ojos cerrados o "
+                      "un modelo .npy creado antes de esta opcion); los ojos no se cambian", flush=True)
+            elif sin_iris:
+                print(f"Aviso: --color-ojos fuente: sin color de ojos en la(s) cara(s) fuente {', '.join(sin_iris)}",
+                      flush=True)
+        if args.detalle_piel and all(c.get("piel") is None for c in caras_src):
+            print("Aviso: --detalle-piel necesita una foto fuente con la cara de frente (un modelo .npy no guarda la "
+                  "piel); no se aplica", flush=True)
         if es_carpeta:
             if args.start is not None or args.end is not None:
                 print("Aviso: --start y --end son solo para videos; en imagenes se ignoran", flush=True)
@@ -883,6 +926,7 @@ _CONFIG_A_OPCION = {
     "indices_fuente": "source_index", "indices_destino": "target_index",
     "mascara": "face_mask", "color": "color",
     "ojos": "eyes", "boca": "mouth", "nariz": "nose", "frente": "remove_bangs", "mejillas": "mejillas",
+    "color_ojos": "color_ojos", "detalle_piel": "detalle_piel",
     "zip": "zip", "zip_conservar": "zip_conservar",
     "maquillaje": "makeup", "oclusion": "occlusion", "oclusion_modo": "oclusion_modo", "filtro": "occlusion_mode",
     "minimo_mejora": "enhance_min_size", "hilos": "threads",

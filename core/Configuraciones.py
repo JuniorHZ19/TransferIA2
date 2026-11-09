@@ -4,6 +4,7 @@ from datetime import datetime
 from core.Mejorador import validar_minimo, MINIMO_POR_DEFECTO
 from core.Proceso_Video import CONTENEDORES, CODECS
 from core.Personas import FPS as FPS_PERSONAS, MAX_FRAMES as MAX_PERSONAS, validar_fps, validar_maximo
+from core import Iris
 
 CARPETA_CONFIGURACIONES = "configuraciones"
 VERSION = 1
@@ -25,6 +26,8 @@ DEFECTOS = {
     "nariz": False,
     "frente": False,
     "mejillas": False,
+    "color_ojos": "ninguno",
+    "detalle_piel": 0.0,
     "maquillaje": 0.0,
     "oclusion": False,
     "oclusion_modo": "adaptable",
@@ -95,7 +98,9 @@ VALIDADORES = {
     "zip": _si_no, "zip_conservar": _si_no, "caras_inclinadas": _si_no,
     "ojos": _si_no, "boca": _si_no, "nariz": _si_no, "frente": _si_no, "mejillas": _si_no, "oclusion": _si_no,
     "mejorar": _si_no,
+    "color_ojos": Iris.validar,
     "maquillaje": _fraccion(0.0, 1.0),
+    "detalle_piel": _fraccion(0.0, 1.0),
     "fuerza_mejora": _fraccion(0.1, 1.0),
     "minimo_mejora": validar_minimo,
     "hilos": _hilos,

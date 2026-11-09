@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox, simpledialog, colorchooser
 import cv2
 from core.Imagenes import leer, guardar
 import os
@@ -14,7 +14,7 @@ from core.Face_Analyzer import Analyzer_Faces
 from core.Identidades import Registro_Identidades
 from core.Modelo_Cara import Modelo_Cara, CARPETA_MODELOS, FPS_VIDEO, MAX_FRAMES_VIDEO, CARPETA_CARAS, MARCA_CARAS
 from core.Proceso_Carpeta import imagenes_carpeta, carpeta_salida, procesar_carpeta
-from core import Configuraciones
+from core import Configuraciones, Iris
 from core.Empaquetar import empaquetar, ruta_zip, disponible as zip_disponible
 from core.Personas import (Personas, validar_fps, validar_maximo, FPS as PERSONAS_FPS, MAX_FRAMES as PERSONAS_MAX,
                            MAX_FRAMES_RANGO as PERSONAS_MAX_RANGO)
@@ -27,6 +27,8 @@ from core.Mejorador import validar_minimo, MINIMO_POR_DEFECTO
 
 # Alto maximo (px) de la lista de modelos de cara antes de mostrar la barra de desplazamiento
 ALTO_LISTA_MODELOS = 380
+# Ultima opcion de «Color de ojos»: abre el selector de colores
+ELEGIR_COLOR = "elegir color..."
 
 
 def copiar_al_portapapeles(img):
@@ -1055,6 +1057,28 @@ class FaceSwapApp:
         ttk.Combobox(pegado_fila, textvariable=self.color_var, values=["ninguna", "suave", "completa"],
                      state="readonly", width=9).pack(side=tk.LEFT)
 
+        # 3b. De la fuente: lo que inswapper no copia de la foto fuente
+        fuente_fila = fila("De la fuente:")
+        # Color del iris: el de la fuente, uno con nombre o uno elegido (#rrggbb)
+        ttk.Label(fuente_fila, text="Color de ojos:").pack(side=tk.LEFT, padx=(0, 5))
+        self.color_ojos_var = tk.StringVar(value="ninguno")
+        self._color_ojos_anterior = "ninguno"
+        color_ojos = ttk.Combobox(fuente_fila, textvariable=self.color_ojos_var, state="readonly", width=12,
+                                  values=["ninguno", "fuente", *Iris.COLORES, ELEGIR_COLOR])
+        color_ojos.pack(side=tk.LEFT)
+        color_ojos.bind("<<ComboboxSelected>>", self.elegir_color_ojos)
+        # El de antes de «elegir color...» (tambien si lo puso una configuracion guardada), para volver si se cancela
+        self.color_ojos_var.trace_add("write", lambda *_: self.color_ojos_var.get() == ELEGIR_COLOR or setattr(
+            self, "_color_ojos_anterior", self.color_ojos_var.get()))
+        # Pecas, lunares, arrugas y poros de la foto fuente (0 = desactivado)
+        ttk.Label(fuente_fila, text="Detalle de piel:").pack(side=tk.LEFT, padx=(20, 5))
+        self.detalle_piel_var = tk.DoubleVar(value=0.0)
+        detalle_valor = ttk.Label(fuente_fila, text="0.00", width=4)
+        ttk.Scale(fuente_fila, from_=0.0, to=1.0, variable=self.detalle_piel_var, length=120).pack(side=tk.LEFT)
+        self.detalle_piel_var.trace_add("write", lambda *_: detalle_valor.configure(
+            text=f"{self.detalle_piel_var.get():.2f}"))
+        detalle_valor.pack(side=tk.LEFT, padx=(5, 0))
+
         # 4. Del destino: partes y maquillaje que se quedan como en el destino
         destino_fila = fila("Del destino:")
         self.var_ojos = tk.BooleanVar(value=False)
@@ -1306,6 +1330,8 @@ class FaceSwapApp:
             "nariz": self.var_nariz.get(),
             "frente": self.var_frente.get(),
             "mejillas": self.var_mejillas.get(),
+            "color_ojos": self.color_ojos_var.get(),
+            "detalle_piel": round(self.detalle_piel_var.get(), 3),
             "maquillaje": round(self.maquillaje_var.get(), 3),
             "oclusion": self.var_oclucion.get(),
             "oclusion_modo": self.oclusion_modo_var.get(),
@@ -1329,7 +1355,8 @@ class FaceSwapApp:
             "indices_fuente": self.src_indices_var, "indices_destino": self.dst_indices_var,
             "mascara": self.mascara_var, "color": self.color_var,
             "ojos": self.var_ojos, "boca": self.var_boca, "nariz": self.var_nariz, "frente": self.var_frente,
-            "mejillas": self.var_mejillas, "maquillaje": self.maquillaje_var, "oclusion": self.var_oclucion, "mejorar": self.var_mejorar,
+            "mejillas": self.var_mejillas, "color_ojos": self.color_ojos_var, "detalle_piel": self.detalle_piel_var,
+            "maquillaje": self.maquillaje_var, "oclusion": self.var_oclucion, "mejorar": self.var_mejorar,
             "oclusion_modo": self.oclusion_modo_var,
             "fuerza_mejora": self.fuerza_gpen_var, "contenedor": self.contenedor_var, "codec": self.codec_var,
             "carpeta_salida": self.output_path_var, "nombre_archivo": self.output_filename_var,
@@ -1700,7 +1727,7 @@ class FaceSwapApp:
             source_img = leer(self.source_path)
             if source_img is None:
                 raise Exception("No se pudo leer la imagen fuente")
-            caras = self.swapper.detectar_caras(source_img)
+            caras = self.swapper.detectar_caras_fuente(source_img)
             if not caras:
                 raise Exception("No se detectó ninguna cara en la imagen fuente")
         self._caras_src_cache = (self.source_path, caras)
@@ -2087,6 +2114,8 @@ class FaceSwapApp:
             nariz=self.var_nariz.get(),
             frente=self.var_frente.get(),
             mejillas=self.var_mejillas.get(),
+            color_ojos=self.color_ojos_var.get(),
+            detalle_piel=self.detalle_piel_var.get(),
             mascara=self.mascara_var.get(),
             color=self.color_var.get(),
             maquillaje=self.maquillaje_var.get(),
@@ -2094,11 +2123,20 @@ class FaceSwapApp:
             mejorar_minimo=self.gpen_minimo()
         )
 
+    def elegir_color_ojos(self, _evento=None):
+        """«Elegir color...» abre el selector de colores; si se cancela, queda el color de antes"""
+        if self.color_ojos_var.get() != ELEGIR_COLOR:
+            return
+        anterior = self._color_ojos_anterior
+        inicial = anterior if anterior.startswith("#") else "#4f7cac"
+        _, elegido = colorchooser.askcolor(color=inicial, title="Color de ojos", parent=self.root)
+        self.color_ojos_var.set(elegido.lower() if elegido else anterior)
+
     def vigilar_configuracion(self):
         """Cada cambio en la configuracion actualiza el preview abierto"""
         for var in (self.src_indices_var, self.dst_indices_var, self.asignacion_var, self.genero_var,
                     self.mascara_var, self.color_var, self.var_ojos, self.var_boca, self.var_nariz, self.var_frente,
-                    self.var_mejillas,
+                    self.var_mejillas, self.color_ojos_var, self.detalle_piel_var,
                     self.maquillaje_var, self.var_oclucion, self.oclusion_modo_var, self.var_mejorar,
                     self.caras_inclinadas_var,
                     self.fuerza_gpen_var,
@@ -2378,6 +2416,8 @@ class FaceSwapApp:
             # solo si esta marcada: los videos empezados antes de esta opcion se siguen pudiendo continuar
             **({"frente": True} if self.var_frente.get() else {}),
             **({"mejillas": True} if self.var_mejillas.get() else {}),
+            **({"color_ojos": self.color_ojos_var.get()} if self.color_ojos_var.get() != "ninguno" else {}),
+            **({"detalle_piel": round(self.detalle_piel_var.get(), 2)} if self.detalle_piel_var.get() > 0.004 else {}),
             # 2: caras inclinadas sin saltos (mezcla gradual entre 10 y 20 grados); 3: caras volteadas;
             # 4: caras de perfil (tono de la mejilla y mascara corrida hacia la oreja)
             "deteccion": 4,

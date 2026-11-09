@@ -22,6 +22,8 @@ Transfer-IA es una aplicación de cambio facial que utiliza inteligencia artific
 - Opción para conservar la nariz del destino (`--nose`)
 - Opción para quitar el cerquillo de la fuente: la frente queda la del destino (`--remove-bangs`)
 - Opción para conservar las mejillas y los pómulos del destino (`--mejillas`)
+- Color de ojos: el iris con el color de la fuente o uno elegido (`--color-ojos`)
+- Detalle de piel: las pecas, lunares y arrugas de la fuente, sin sus sombras (`--detalle-piel`)
 - Conservar el maquillaje o la pintura de cara del destino (`--makeup`)
 - Mejorador de caras GPEN opcional para más nitidez en piel, ojos y dientes (`--enhance`)
 - Videos que se pueden detener y continuar después, aunque se corte la luz (`--resume`); sin imágenes temporales en disco y con poca RAM
@@ -108,6 +110,7 @@ En la interfaz principal:
      | **Caras** | **Asignación**: `posicion` (izquierda a derecha, como siempre) o `identidad` (ver [Asignación por identidad](#asignación-por-identidad---asignacion-identidad)). **Género destino**: `todos`, `mujer` u `hombre`. **Análisis de personas** (solo con `identidad`): frames por segundo (`1`) y máximo de frames (`300`) del análisis previo del video |
      | **Índices** | **Fuente** y **Destino**: qué cara fuente va en qué cara destino (`0`, `0,1`...). Una misma fuente puede ir a varias caras repitiendo su número: Fuente `0,0` y Destino `0,1` pone la cara 0 en las dos. En modo identidad con video, Destino es el número de persona (0 = la que más aparece); el botón **Ver personas...** muestra quién es cada una (ver [Asignación por identidad](#asignación-por-identidad---asignacion-identidad)) |
      | **Pegado** | **Máscara**: `normal`, `amplia` (por defecto) o `maxima`, cuánta zona de la cara se cambia (ver [Zona de la cara](#zona-de-la-cara---face-mask)). **Corrección de color**: `ninguna` (por defecto), `suave` o `completa`, iguala el color de la cara cambiada a la piel del destino (ver [Corrección de color](#corrección-de-color---color)) |
+     | **De la fuente** | **Color de ojos**: `ninguno` (por defecto), `fuente`, un color o «elegir color...» (ver [Color de ojos](#color-de-ojos---color-ojos)). **Detalle de piel**: deslizador de 0 (desactivado) a 1, las pecas, lunares y arrugas de la foto fuente (ver [Detalle de piel](#detalle-de-piel-de-la-fuente---detalle-piel)) |
      | **Del destino** | **Ojos / Boca / Nariz**: cambia la cara pero deja esas partes originales del destino (ver [ojos](#conservar-ojos-del-destino), [boca](#conservar-boca-del-destino---mouth) y [nariz](#conservar-nariz-del-destino---nose)). **Frente (quitar cerquillo)**: la frente queda la del destino, para cuando la fuente tiene cerquillo (ver [Quitar el cerquillo](#quitar-el-cerquillo-de-la-fuente---remove-bangs)). **Mejillas y pómulos**: las mejillas quedan las del destino (ver [Conservar mejillas](#conservar-mejillas-y-pómulos-del-destino---mejillas)). **Maquillaje**: deslizador de 0 (desactivado) a 1; devuelve el maquillaje o la pintura de cara del destino (ver [Conservar maquillaje](#conservar-maquillaje---makeup)) |
      | **Oclusión** | **Activar**: deja el pelo, las manos y los objetos delante de la cara. **Modo**: `debil`, `adaptable` (por defecto) o `fuerte`, cuánta cara puede quedar sobre lo que la tapa (ver [Modo de la oclusión](#modo-de-la-oclusión---oclusion-modo)) |
      | **Nitidez** | **Filtro**: `None`, `natural`, `strong` o `adaptativo` (recomendado). Funciona con o sin la oclusión (ver [Nitidez de la cara](#nitidez-de-la-cara---nitidez)) |
@@ -244,6 +247,9 @@ Opciones de `process`:
 --nose                     cambia el rostro pero conserva la nariz del destino
 --remove-bangs             quita el cerquillo de la fuente: la frente queda la del destino
 --mejillas                 cambia el rostro pero conserva las mejillas y los pómulos del destino
+--color-ojos COLOR         color del iris: fuente, azul, verde, miel, gris, marron o #RRGGBB
+                           (por defecto: ninguno)
+--detalle-piel FUERZA      0 (por defecto) a 1: pecas, lunares y arrugas de la foto fuente
 --makeup FUERZA            0 (por defecto, desactivado) a 1: conserva el maquillaje o la pintura de cara
                            del destino (Halloween, catrina, pintura artística); más fuerza = más
                            maquillaje y menos parecido con la fuente. Recomendado: 0.7 a 1
@@ -552,6 +558,44 @@ python cli.py process --source "src/cara.jpg" --target "src/video.mp4" --output 
 ```
 
 Ajustes en el código: `MEJILLAS_OJO`, `MEJILLAS_NARIZ`, `MEJILLAS_BOCA`, `MEJILLAS_CONTORNO` y `MEJILLAS_DIFUMINADO` en `core/Face_Swaper.py`.
+
+### Color de ojos (`--color-ojos`)
+
+El cambio de cara no copia el color de los ojos de la fuente: inswapper solo usa su vector de identidad y dibuja el iris borroso. Con `--color-ojos` (o **Color de ojos** en la fila «De la fuente» de la interfaz) el iris toma otro color y conserva sus vetas; la pupila, los reflejos y el blanco del ojo no se tocan.
+
+| Valor | Color |
+|---|---|
+| `ninguno` | Por defecto: como antes |
+| `fuente` | El de los ojos de la foto fuente (o del modelo `.npy`, si se creó con esta versión) |
+| `azul`, `verde`, `miel`, `gris`, `marron` | Colores de iris reales (para probar lentes de contacto, por ejemplo) |
+| `#RRGGBB` | Un color propio, tal cual (en la interfaz: «elegir color...») |
+
+```bash
+python cli.py process --source "src/cara.jpg" --target "src/video.mp4" --output "output/resultado.mp4" --color-ojos fuente --eyes --overwrite
+```
+
+- Con `--eyes` los ojos quedan los del destino (nítidos) y se tiñen con el color pedido.
+- El iris se ubica con los 106 puntos (pupila y contorno del ojo) y se busca su borde con la esclera en el destino original. No se tiñen los ojos cerrados, los tapados (gorra, visera; con `--occlusion`, tampoco anteojos de sol o una mano) ni los de una cara girada más de 65°.
+- Los modelos `.npy` guardan el color del iris en su `.json` (`color_iris`). Con un modelo creado antes de esta opción, `fuente` avisa y no cambia los ojos: vuelve a crearlo.
+- Límites: con ojos entrecerrados o mirando muy arriba el color puede caer un poco en el párpado; ojos chicos y oscuros pueden no teñirse.
+
+Ajustes en el código: `COLORES`, `FUERZA`, `IRIS_MANCHAS`, `IRIS_CONTRASTE` e `IRIS_GIRO` en `core/Iris.py`.
+
+### Detalle de piel de la fuente (`--detalle-piel`)
+
+El cambio de cara no copia las pecas, los lunares ni las arrugas de la fuente: dibuja una piel lisa. Con `--detalle-piel FUERZA` (0 a 1; o el deslizador **Detalle de piel** de la fila «De la fuente» en la interfaz) esos rasgos de la **foto** fuente pasan al resultado, cada uno en su lugar de la cara.
+
+```bash
+python cli.py process --source "src/cara_con_pecas.jpg" --target "src/video.mp4" --output "output/resultado.mp4" --detalle-piel 0.8 --occlusion --overwrite
+```
+
+- Se llevan solo los **rasgos**: lo fino (poros, pecas chicas, arrugas finas) y las manchas redondeadas hasta el tamaño de un lunar. No pasan las sombras de la cara fuente (costado de la nariz, surcos de la sonrisa, ojeras) ni, si la fuente es un hombre, la barba o el bigote.
+- Cada rasgo va a su lugar con una malla de triángulos sobre los 106 puntos de la cara (más unos puntos en la frente), aunque las dos caras tengan distinta forma o giro.
+- Va después de GPEN y antes de la oclusión: el pelo o las manos sobre la cara quedan del destino. Sin `--occlusion` igual se calcula la máscara de la cara (algo más lento).
+- Necesita una foto: un modelo `.npy` no guarda la piel (el programa avisa y no la aplica).
+- Límites: las arrugas finas se conservan al 75 %; un lunar dentro de la barba de un hombre se va con ella; con un destino mucho más chico que la fuente las pecas muy finas casi no se ven.
+
+Ajustes en el código: las constantes al principio de `core/Piel.py` (`RASGO_FINO`, `RASGO_GRANDE`, `FORMA_MANCHA`, `MANCHA_CONTRASTE`, `BARBA`...).
 
 ### Quitar el cerquillo de la fuente (`--remove-bangs`)
 

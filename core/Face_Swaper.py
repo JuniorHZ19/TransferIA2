@@ -9,6 +9,7 @@ from core.Face_Analyzer import Analyzer_Faces
 from core.xseg import DFL_XSeg_Model
 from core.Identidades import Registro_Identidades
 from core.Mejorador import Mejorador_Cara, MEZCLA, MINIMO_POR_DEFECTO
+from core import Iris, Piel
 import threading
 
 # Indices de los ojos, la boca (labios) y la nariz (puente y fosas) en los 106 puntos (landmark_2d_106) de buffalo_l
@@ -99,10 +100,13 @@ class Swapper_Faces:
         return  self.__class__._SWAPPER_MODEL
     
 
-    def cambiar_Faces(self,frame_dst,frame_src=None,index_src="0",index_dst="0",oclution=True,mode="None",genero="todos",ojos=False,mascara="amplia",caras_src=None,boca=False,color="ninguna",nariz=False,maquillaje=0.0,mejorar=0.0,devolver_mascara=False,mejorar_minimo=MINIMO_POR_DEFECTO,frente=False,oclusion_modo="adaptable",mejillas=False):
+    def cambiar_Faces(self,frame_dst,frame_src=None,index_src="0",index_dst="0",oclution=True,mode="None",genero="todos",ojos=False,mascara="amplia",caras_src=None,boca=False,color="ninguna",nariz=False,maquillaje=0.0,mejorar=0.0,devolver_mascara=False,mejorar_minimo=MINIMO_POR_DEFECTO,frente=False,oclusion_modo="adaptable",mejillas=False,color_ojos=None,detalle_piel=0.0):
 
         '''
          caras_src: caras fuente ya preparadas (de una foto o de modelos .npy); si es None se detectan en frame_src.
+        color_ojos: color al que se llevan los iris (ver Iris.color_objetivo); None = no se cambia.
+        detalle_piel: de 0 a 1, cuanto del detalle de la piel de la fuente (pecas, lunares, arrugas) se lleva al
+        destino (ver core/Piel.py); necesita una foto fuente, no un modelo .npy.
         Con devolver_mascara=True devuelve (frame, mascara): la zona que de verdad cambio, de 0 a 1 (ver cambiar_una)
         '''
      
@@ -112,7 +116,7 @@ class Swapper_Faces:
 
 
         if caras_src is None:
-            caras_src=self.__class__._ANALIZADOR.obtener_caras(frame_src)
+            caras_src=self.detectar_caras_fuente(frame_src)
 
         caras_dst=self.__class__._ANALIZADOR.obtener_caras(frame_dst,genero=genero)
 
@@ -132,7 +136,8 @@ class Swapper_Faces:
 
          fake_frame, alfa = self.cambiar_una(frame_dst, caras_src[indice_src], caras_dst[indice_dst], oclution, mode,
                                              ojos, mascara, boca, color, nariz, maquillaje, mejorar, devolver_mascara,
-                                             mejorar_minimo, frente, oclusion_modo, mejillas=mejillas)
+                                             mejorar_minimo, frente, oclusion_modo, mejillas=mejillas,
+                                             color_ojos=color_ojos, detalle_piel=detalle_piel)
          if devolver_mascara:
             mascara_total = np.maximum(mascara_total, alfa)
 
@@ -142,10 +147,12 @@ class Swapper_Faces:
 
     def cambiar_una(self, frame, cara_src, cara_dst, oclution=True, mode="None", ojos=False, mascara="amplia",
                     boca=False, color="ninguna", nariz=False, maquillaje=0.0, mejorar=0.0, devolver_mascara=False,
-                    mejorar_minimo=MINIMO_POR_DEFECTO, frente=False, oclusion_modo="adaptable", mejillas=False):
+                    mejorar_minimo=MINIMO_POR_DEFECTO, frente=False, oclusion_modo="adaptable", mejillas=False,
+                    color_ojos=None, detalle_piel=0.0):
 
         '''
-         Cambia una sola cara: pegado (+ color + maquillaje) -> GPEN -> oclusion -> partes del destino.
+         Cambia una sola cara: pegado (+ color + maquillaje) -> GPEN -> detalle de la piel de la fuente -> oclusion
+        -> partes del destino -> color de los ojos.
         Devuelve (frame, alfa). Con devolver_mascara=True, alfa es cuanto cambio cada pixel respecto de "frame"
         (0 = queda el destino, 1 = todo nuevo), combinando las mascaras de cada paso; si no, alfa es None.
         '''
@@ -158,12 +165,14 @@ class Swapper_Faces:
 
         fake_frame, zona = self.pegar_cara(frame, cara_src, cara_dst, mascara, color, maquillaje, devolver_zona=True)
         alfa = zona if d else None
-        # La mascara de la cara (XSeg) se calcula una vez: la usan completar_perfil y la oclusion
+        # La mascara de la cara (XSeg) se calcula una vez: la usan completar_perfil, el detalle de piel y la oclusion.
+        # El detalle de piel la necesita aun sin oclusion: sin ella teñiria el pelo o la mano sobre la cara
         mascara_cara = None
-        if oclution == True and COMPLETAR_PERFIL:
+        usar_piel = bool(detalle_piel) and cara_src.get("piel") is not None
+        if (oclution == True and COMPLETAR_PERFIL) or usar_piel:
             with self.__class__._LOCK:
                 mascara_cara = self.__class__._XSEG_MODEL.get_complete_mask(frame, cara_dst)
-            if mascara_cara is not None:
+            if mascara_cara is not None and oclution == True and COMPLETAR_PERFIL:
                 fake_frame, extra = self.completar_perfil(frame, fake_frame, cara_dst, zona, mascara_cara)
                 if d and extra is not None:
                     alfa = np.maximum(alfa, extra)
@@ -174,6 +183,15 @@ class Swapper_Faces:
                 # GPEN retoca tambien un poco alrededor de la cara (su recorte es mas grande que la zona pegada)
                 fake_frame, g = fake_frame
                 alfa = alfa + (1 - alfa) * g
+
+        # Despues de GPEN (que alisaria las pecas) y antes de la oclusion: lo que tapa la cara vuelve del destino
+        if usar_piel:
+            fake_frame = Piel.aplicar(fake_frame, cara_dst, cara_src["piel"], detalle_piel, mascara_cara=mascara_cara,
+                                      devolver_mascara=d)
+            if d:
+                fake_frame, p = fake_frame
+                if p is not None:
+                    alfa = np.maximum(alfa, p)
 
         if oclution == True:
             with self.__class__._LOCK:
@@ -194,6 +212,16 @@ class Swapper_Faces:
             if d:
                 fake_frame, p = fake_frame
                 alfa = alfa * (1 - p)
+
+        # Al final: tambien tiñe los ojos del destino cuando se conservan (--eyes)
+        objetivo = Iris.color_objetivo(color_ojos, cara_src)
+        if objetivo is not None:
+            fake_frame = Iris.cambiar_color(fake_frame, cara_dst, objetivo, mascara_cara=mascara_cara,
+                                            devolver_mascara=d, original=frame)
+            if d:
+                fake_frame, c = fake_frame
+                if c is not None:
+                    alfa = np.maximum(alfa, c)
 
         return fake_frame, (np.clip(alfa, 0, 1).astype(np.float32) if d else None)
 
@@ -423,11 +451,25 @@ class Swapper_Faces:
         return self.__class__._ANALIZADOR.obtener_caras(frame, genero=genero)
 
 
+    def detectar_caras_fuente(self, frame):
+
+        '''Caras de la foto fuente, cada una con el color de su iris ("color_iris", None si no se ven los ojos)
+           para --color-ojos fuente y el detalle de su piel ("piel", ver Piel.preparar_fuente) para --detalle-piel:
+           despues solo queda el vector de la cara y ya no la foto'''
+        caras = self.detectar_caras(frame)
+        for cara in caras:
+            cara["color_iris"] = Iris.color_iris(frame, cara)
+            with self.__class__._LOCK:
+                mascara = self.__class__._XSEG_MODEL.get_complete_mask(frame, cara)
+            cara["piel"] = Piel.preparar_fuente(frame, cara, mascara)
+        return caras
+
+
     def cambiar_Faces_por_identidad(self, frame_dst, caras_src, mapa, refs, caras_dst=None,
                                     oclution=True, mode="None", genero="todos", ojos=False, mascara="amplia",
                                     boca=False, color="ninguna", nariz=False, maquillaje=0.0, mejorar=0.0,
                                     devolver_mascara=False, mejorar_minimo=MINIMO_POR_DEFECTO, frente=False,
-                                    oclusion_modo="adaptable", mejillas=False):
+                                    oclusion_modo="adaptable", mejillas=False, color_ojos=None, detalle_piel=0.0):
 
         '''
          Cambia las caras emparejando por identidad y no por posicion. "mapa" es {identidad_destino: indice_fuente},
@@ -450,7 +492,8 @@ class Swapper_Faces:
 
             fake_frame, alfa = self.cambiar_una(fake_frame, caras_src[indice_src], cara_dst, oclution, mode, ojos,
                                                 mascara, boca, color, nariz, maquillaje, mejorar, devolver_mascara,
-                                                mejorar_minimo, frente, oclusion_modo, mejillas=mejillas)
+                                                mejorar_minimo, frente, oclusion_modo, mejillas=mejillas,
+                                                color_ojos=color_ojos, detalle_piel=detalle_piel)
             if devolver_mascara:
                 mascara_total = np.maximum(mascara_total, alfa)
 
