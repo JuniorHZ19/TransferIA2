@@ -9,7 +9,7 @@ from core.Imagenes import leer, guardar
 import numpy as np
 from insightface.app.common import Face
 from core.Identidades import Registro_Identidades
-from core import Iris
+from core import Iris, Forma
 
 EXTENSIONES_IMAGEN = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 EXTENSIONES_VIDEO = (".mp4", ".avi", ".mkv", ".mov", ".webm")
@@ -42,6 +42,15 @@ LARGO_NOMBRE = 40
 LARGO_VIDEO_EN_CARA = 30
 LADO_RECORTE = 384
 
+# Imagen de la piel del modelo (<nombre>.piel.png, para --detalle-piel): la cara mas de frente y nitida entre las
+# MAX_CANDIDATOS_PIEL de mejor calidad, recortada con margen (la cara ocupa la mitad del lado) a como mucho
+# LADO_MAX_PIEL. Se guarda en PNG (sin perdida: el JPG borra los poros). La nitidez se mide con la cara llevada a
+# NITIDEZ_OJOS pixeles entre los ojos, asi una cara grande no gana solo por tener mas pixeles
+SUFIJO_PIEL = ".piel"
+MAX_CANDIDATOS_PIEL = 8
+LADO_MAX_PIEL = 1024
+NITIDEZ_OJOS = 64.0
+
 
 class Modelo_Cara:
 
@@ -51,8 +60,11 @@ class Modelo_Cara:
     inswapper solo usa ese vector de la cara fuente, asi que se puede usar en lugar de una foto.
 
      Junto al .npy se guardan:
-        <nombre>.json   datos del modelo (fotos usadas, caras descartadas, modelo de reconocimiento)
-        <nombre>.jpg    miniatura de la mejor cara, para reconocer de quien es
+        <nombre>.json      datos del modelo (fotos usadas, caras descartadas, modelo de reconocimiento)
+        <nombre>.jpg       miniatura de la mejor cara, para reconocer de quien es
+        <nombre>.piel.png  foto de la cara mas de frente y nitida: de ella sale el detalle de piel (--detalle-piel)
+                           cada vez que se usa el modelo. Se puede reemplazar por otra foto de la misma persona
+                           (.png, .jpg, .webp...; si hay varias se usa la mas nueva)
     '''
 
     @staticmethod
@@ -158,7 +170,9 @@ class Modelo_Cara:
         '''
 
         registro = Registro_Identidades(max_ids=1)
-        caras = Modelo_Cara._recolectar(rutas, analizador, progreso, fps_video, max_frames, Modelo_Cara._miniatura)
+        candidatos_piel = []
+        caras = Modelo_Cara._recolectar(rutas, analizador, progreso, fps_video, max_frames, Modelo_Cara._miniatura,
+                                        candidatos_piel=candidatos_piel)
 
         # Referencia = la cara que mas se parece a todas las demas; asi un intruso no arrastra el promedio
         vectores = np.array([c.normed_embedding for c, _, _, _ in caras], dtype=np.float32)
@@ -192,6 +206,14 @@ class Modelo_Cara:
         np.save(base + ".npy", promedio.astype(np.float32))
         guardar(base + ".jpg", miniatura)
 
+        # Piel: la candidata mas nitida que sea de la persona del modelo (no un intruso)
+        Modelo_Cara._borrar_piel(base)
+        usadas_set = set(usadas)
+        piel = max((c for c in candidatos_piel if c[1] in usadas_set), key=lambda c: c[0], default=None)
+        if piel is not None and not guardar(base + SUFIJO_PIEL + ".png", piel[2]):
+            progreso("Aviso: no se pudo guardar la imagen de la piel")
+            piel = None
+
         datos = {
             "nombre": os.path.basename(base),
             "reconocimiento": RECONOCIMIENTO,
@@ -204,6 +226,12 @@ class Modelo_Cara:
         iris = [caras[i][0].get("color_iris") for i in usadas if caras[i][0].get("color_iris") is not None]
         if iris:
             datos["color_iris"] = [round(float(v), 1) for v in np.median(iris, 0)]
+        # Forma de la cara (ancho a cada altura, para --forma-cara): mediana de las caras usadas casi de frente
+        forma = Forma.combinar([Forma.medir(caras[i][0]) for i in usadas])
+        if forma is not None:
+            datos["forma"] = [round(float(v), 3) for v in forma]
+        if piel is not None:
+            datos["piel"] = {"imagen": os.path.basename(base) + SUFIJO_PIEL + ".png", "origen": caras[piel[1]][2]}
         # Por video: cuantos frames aportaron al menos una cara usada
         frames_video = {}
         for video, _ in {(caras[i][3], caras[i][2]) for i in usadas if caras[i][3] is not None}:
@@ -218,12 +246,14 @@ class Modelo_Cara:
 
 
     @staticmethod
-    def _recolectar(rutas, analizador, progreso, fps_video, max_frames, recortar):
+    def _recolectar(rutas, analizador, progreso, fps_video, max_frames, recortar, candidatos_piel=None):
 
         '''
          Caras utiles (nitidas, de frente y de buen tamaño) de las fotos y de los frames de los videos.
         Devuelve [(cara, recortar(imagen, cara), origen, nombre del video o None)]; "origen" identifica la foto
         o el frame ("video.mp4 12.5s"): dos caras con el mismo origen salieron de la misma imagen.
+         Si se pasa la lista candidatos_piel, se llena con las MAX_CANDIDATOS_PIEL caras de mejor puntaje para la
+        piel: (puntaje, indice en la lista devuelta, recorte en alta resolucion).
         '''
 
         imagenes = Modelo_Cara.rutas_imagenes(rutas)
@@ -240,7 +270,14 @@ class Modelo_Cara:
             encontradas = [c for c in analizador.obtener_caras(imagen) if registro.calidad_cara(c) > 0]
             for c in encontradas:
                 c["color_iris"] = Iris.color_iris(imagen, c)  # el vector no lo tiene: para --color-ojos fuente
-            caras.extend((c, recortar(imagen, c), origen, video) for c in encontradas)
+                if candidatos_piel is not None:
+                    # Recorte en alta resolucion solo de las mejores (cientos de frames no caben en memoria)
+                    puntaje = Modelo_Cara._puntaje_piel(imagen, c, registro.calidad_cara(c))
+                    if puntaje > 0 and (len(candidatos_piel) < MAX_CANDIDATOS_PIEL or puntaje > candidatos_piel[-1][0]):
+                        candidatos_piel.append((puntaje, len(caras), Modelo_Cara._recorte_piel(imagen, c)))
+                        candidatos_piel.sort(key=lambda x: -x[0])
+                        del candidatos_piel[MAX_CANDIDATOS_PIEL:]
+                caras.append((c, recortar(imagen, c), origen, video))
             return len(encontradas)
 
         analizador.preparar_modelo(dimension=DET_SIZE_CREACION)
@@ -448,6 +485,21 @@ class Modelo_Cara:
         if iris:
             datos["color_iris"] = [round(float(v), 1) for v in np.average([c for c, _ in iris], axis=0,
                                                                          weights=[p for _, p in iris])]
+        # Forma: promedio de los modelos que la tienen, con el mismo peso que el vector
+        forma = Forma.combinar([d.get("forma") if Forma.valida(d.get("forma")) else None for d in datos_modelos],
+                               pesos=[float(p) for p in pesos])
+        if forma is not None:
+            datos["forma"] = [round(float(v), 3) for v in forma]
+        # Piel: no se promedia (las pecas de varias caras quedarian borrosas); se copia la del modelo con mas caras
+        # que tenga una, igual que la miniatura
+        Modelo_Cara._borrar_piel(base)
+        for i in np.argsort(-pesos):
+            imagen_piel = Modelo_Cara.imagen_piel(rutas[i])
+            if imagen_piel is not None:
+                destino = base + SUFIJO_PIEL + os.path.splitext(imagen_piel)[1].lower()
+                shutil.copyfile(imagen_piel, destino)
+                datos["piel"] = {"imagen": os.path.basename(destino), "origen": f"modelo {nombres[i]}"}
+                break
         with open(base + ".json", "w", encoding="utf-8") as archivo:
             json.dump(datos, archivo, ensure_ascii=False, indent=2)
 
@@ -467,6 +519,150 @@ class Modelo_Cara:
         alto, ancho = imagen.shape[:2]
         recorte = imagen[max(0, cy - mitad):min(alto, cy + mitad), max(0, cx - mitad):min(ancho, cx + mitad)]
         return cv2.resize(recorte, (lado, lado), interpolation=cv2.INTER_AREA)
+
+
+    @staticmethod
+    def _puntaje_piel(imagen, cara, calidad):
+
+        '''Que tan buena es la cara para sacar la piel: calidad (de frente y grande) por nitidez. 0 si no sirve
+           (sin los 106 puntos que usa Piel no se puede)'''
+
+        if calidad <= 0 or cara.get("landmark_2d_106") is None:
+            return 0.0
+        d = float(np.linalg.norm(cara.kps[1] - cara.kps[0]))
+        x1, y1, x2, y2 = cara.bbox.astype(int)
+        alto, ancho = imagen.shape[:2]
+        recorte = imagen[max(0, y1):min(alto, y2), max(0, x1):min(ancho, x2)]
+        if recorte.size == 0 or d <= 0:
+            return 0.0
+        escala = NITIDEZ_OJOS / d
+        gris = cv2.cvtColor(recorte, cv2.COLOR_BGR2GRAY)
+        gris = cv2.resize(gris, None, fx=escala, fy=escala, interpolation=cv2.INTER_AREA if escala < 1 else cv2.INTER_LINEAR)
+        nitidez = float(cv2.Laplacian(gris, cv2.CV_64F).var())
+        return calidad * math.sqrt(nitidez)
+
+
+    @staticmethod
+    def _recorte_piel(imagen, cara, lado_max=LADO_MAX_PIEL):
+
+        '''Recorte cuadrado con la cara al centro (ocupa la mitad del lado), en la resolucion de la foto (como
+           mucho lado_max): queda una foto normal, que se vuelve a detectar al usar el modelo'''
+
+        x1, y1, x2, y2 = cara.bbox
+        mitad = max(x2 - x1, y2 - y1)
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        alto, ancho = imagen.shape[:2]
+        recorte = imagen[int(max(0, cy - mitad)):int(min(alto, cy + mitad)),
+                         int(max(0, cx - mitad)):int(min(ancho, cx + mitad))]
+        lado = max(recorte.shape[:2])
+        if lado > lado_max:
+            escala = lado_max / lado
+            recorte = cv2.resize(recorte, None, fx=escala, fy=escala, interpolation=cv2.INTER_AREA)
+        return recorte.copy()
+
+
+    @staticmethod
+    def rutas_piel(ruta):
+
+        '''Todas las imagenes de piel del modelo (<nombre>.piel.png, .jpg...) que existen'''
+
+        base = os.path.splitext(ruta)[0] + SUFIJO_PIEL
+        return [base + e for e in EXTENSIONES_IMAGEN if os.path.isfile(base + e)]
+
+
+    @staticmethod
+    def imagen_piel(ruta):
+
+        '''La imagen de piel del modelo, o None. Si hay varias (se puso otra foto sin borrar la anterior), la mas
+           nueva: asi basta con copiar una foto nueva junto al modelo'''
+
+        rutas = Modelo_Cara.rutas_piel(ruta)
+        return max(rutas, key=os.path.getmtime) if rutas else None
+
+
+    @staticmethod
+    def _borrar_piel(base):
+
+        '''Borra las imagenes de piel de un modelo que se va a crear de nuevo (si no, una vieja mas nueva ganaria)'''
+
+        for ruta_piel in Modelo_Cara.rutas_piel(base + ".npy"):
+            os.remove(ruta_piel)
+
+
+    @staticmethod
+    def agregar_piel(cara, swapper, avisar=print):
+
+        '''
+         Lleva a la cara del modelo (de cargar) el detalle de piel de su imagen de piel, para --detalle-piel. La
+        imagen se lee cada vez que cambia (otra foto o la misma modificada), asi se puede reemplazar sin crear el
+        modelo de nuevo. Se usa la cara de la imagen que mas se parece al modelo; si ninguna parece la misma
+        persona, avisa y no lleva piel. Devuelve True si la cara quedo con piel.
+        '''
+
+        ruta = cara.get("ruta_modelo")
+        imagen_piel = Modelo_Cara.imagen_piel(ruta) if ruta else None
+        firma = (imagen_piel, os.path.getmtime(imagen_piel)) if imagen_piel else None
+        if cara.get("piel_firma") == firma and "piel" in cara:
+            return cara.get("piel") is not None
+        cara["piel_firma"] = firma
+        cara["piel"] = None
+        if imagen_piel is None:
+            return False
+        nombre = os.path.basename(imagen_piel)
+        imagen = leer(imagen_piel)
+        if imagen is None:
+            avisar(f"Aviso: no se pudo leer la imagen de piel {nombre}")
+            return False
+        piel, similitud = swapper.piel_de_imagen(imagen, cara.normed_embedding)
+        if similitud is None:
+            avisar(f"Aviso: no se encontro una cara en la imagen de piel {nombre}")
+        elif similitud < UMBRAL_MISMA_PERSONA:
+            avisar(f"Aviso: la imagen de piel {nombre} no parece la misma persona que el modelo "
+                   f"(similitud {similitud:.2f}); no se usa")
+        elif piel is None:
+            avisar(f"Aviso: no se pudo sacar la piel de {nombre} (¿cara muy de perfil o muy chica?)")
+        else:
+            cara["piel"] = piel
+            return True
+        return False
+
+
+    @staticmethod
+    def agregar_forma(cara, swapper, avisar=print):
+
+        '''
+         Para --forma-cara con un modelo creado antes de guardar la forma: la mide en su imagen de piel (la cara
+        del modelo mas de frente) y la guarda en el .json, asi se mide una sola vez. Devuelve True si la cara quedo
+        con forma.
+        '''
+
+        if cara.get("forma") is not None:
+            return True
+        ruta = cara.get("ruta_modelo")
+        imagen_piel = Modelo_Cara.imagen_piel(ruta) if ruta else None
+        if imagen_piel is None:
+            return False
+        imagen = leer(imagen_piel)
+        caras = swapper.detectar_caras(imagen) if imagen is not None else []
+        if not caras:
+            return False
+        similitudes = [float(c.normed_embedding @ cara.normed_embedding) for c in caras]
+        i = int(np.argmax(similitudes))
+        forma = Forma.medir(caras[i]) if similitudes[i] >= UMBRAL_MISMA_PERSONA else None
+        if forma is None:
+            avisar(f"Aviso: no se pudo medir la forma de la cara en {os.path.basename(imagen_piel)} "
+                   "(¿otra persona o muy de perfil?)")
+            return False
+        cara["forma"] = forma
+        ruta_json = os.path.splitext(ruta)[0] + ".json"
+        datos = Modelo_Cara.datos(ruta)
+        datos["forma"] = [round(float(v), 3) for v in forma]
+        try:
+            with open(ruta_json, "w", encoding="utf-8") as archivo:
+                json.dump(datos, archivo, ensure_ascii=False, indent=2)
+        except OSError:
+            pass  # sin permiso de escritura: se usa igual, solo que se vuelve a medir la proxima vez
+        return True
 
 
     @staticmethod
@@ -494,9 +690,12 @@ class Modelo_Cara:
                   f"{RECONOCIMIENTO}; conviene volver a crearlo")
 
         cara = Face(embedding=vector / np.linalg.norm(vector))
+        cara["ruta_modelo"] = os.path.abspath(ruta)  # para buscar su imagen de piel (agregar_piel)
         iris = datos.get("color_iris")
         if isinstance(iris, list) and len(iris) == 3 and all(isinstance(v, (int, float)) for v in iris):
             cara["color_iris"] = np.asarray(iris, np.float32)
+        if Forma.valida(datos.get("forma")):
+            cara["forma"] = np.asarray(datos["forma"], np.float32)
         return cara
 
 
@@ -538,18 +737,18 @@ class Modelo_Cara:
     def eliminar(ruta):
 
         '''
-         Borra un modelo: el .npy y lo que lo acompaña (.json con sus datos y .jpg con la miniatura).
-        No se puede deshacer. Devuelve los archivos borrados.
+         Borra un modelo: el .npy y lo que lo acompaña (.json con sus datos, .jpg con la miniatura e imagen de
+        piel). No se puede deshacer. Devuelve los archivos borrados.
         '''
 
         if not Modelo_Cara.es_modelo(ruta):
             raise ValueError(f"No es un modelo de cara (.npy): {ruta}")
         base = os.path.splitext(ruta)[0]
         borrados = []
-        for extension in (".npy", ".json", ".jpg"):
-            if os.path.isfile(base + extension):
-                os.remove(base + extension)
-                borrados.append(base + extension)
+        for archivo in [base + e for e in (".npy", ".json", ".jpg")] + Modelo_Cara.rutas_piel(ruta):
+            if os.path.isfile(archivo):
+                os.remove(archivo)
+                borrados.append(archivo)
         return borrados
 
 

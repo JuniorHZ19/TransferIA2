@@ -225,5 +225,49 @@
    "README.md"
   ],
   "archivo": "2026-11-04-detalle-de-piel.docx"
+ },
+ {
+  "fecha": "2026-11-09",
+  "titulo": "Detalle de piel en los modelos",
+  "tipo": "Mejora",
+  "resumen": "Al crear un modelo .npy se guarda <nombre>.piel.png (la cara más de frente y nítida) y --detalle-piel funciona también con modelos. El mensaje dice de qué foto salió y el botón «Piel» de «Elegir modelos» deja verla o cambiarla por otra foto de la misma persona.",
+  "porque": "El .npy solo guarda el vector de identidad, sin imagen: no había de dónde sacar las pecas y lunares.",
+  "archivos_tocados": [
+   "core/Modelo_Cara.py",
+   "core/Face_Swaper.py",
+   "cli.py",
+   "app.py",
+   "README.md"
+  ],
+  "archivo": "2026-11-09-piel-en-modelos.docx"
+ },
+ {
+  "fecha": "2026-11-09",
+  "titulo": "Buscador de modelos",
+  "tipo": "Mejora",
+  "resumen": "La ventana «Elegir modelos» tiene una caja «Buscar» que filtra los modelos mientras se escribe, sin importar tildes ni mayúsculas, con un contador «N de M». Enter marca el único resultado y Esc borra la búsqueda o cierra.",
+  "porque": "Con muchos modelos la lista era larga y había que recorrerla con la vista.",
+  "archivos_tocados": [
+   "app.py"
+  ],
+  "archivo": "2026-11-09-buscador-de-modelos.docx"
+ },
+ {
+  "fecha": "2026-11-12",
+  "titulo": "Forma de la cara y oclusión «objetos»",
+  "tipo": "Mejora",
+  "resumen": "Opción «Forma de la cara» (--forma-cara): antes del cambio, el contorno del destino toma el ancho de la fuente (mandíbula y cachetes), con un thin-plate spline; los modelos guardan su forma. Modo de oclusión «objetos»: pega el cuadro entero de inswapper y solo devuelve del destino lo que tapa la cara (mano, micrófono, cerquillo).",
+  "porque": "Una cara ancha sobre una delgada salía con el mentón y los cachetes recortados al contorno del destino: inswapper dibuja con la geometría del destino y la oclusión recortaba a la piel del destino.",
+  "archivos_tocados": [
+   "core/Forma.py",
+   "core/Face_Swaper.py",
+   "core/Modelo_Cara.py",
+   "core/Configuraciones.py",
+   "core/xseg.py",
+   "cli.py",
+   "app.py",
+   "README.md"
+  ],
+  "archivo": "2026-11-12-forma-cara-y-oclusion-objetos.docx"
  }
 ]

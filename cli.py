@@ -148,10 +148,12 @@ def build_parser():
     )
     process_parser.add_argument(
         "--oclusion-modo",
-        choices=["debil", "adaptable", "fuerte"],
+        choices=["debil", "adaptable", "fuerte", "objetos"],
         default="adaptable",
         help="con --occlusion, cuanta cara puede quedar sobre lo que la tapa en el borde: debil (como antes), "
-             "adaptable (por defecto: no pinta cara sobre el objeto) o fuerte (objeto limpio hasta su borde)",
+             "adaptable (por defecto: no pinta cara sobre el objeto), fuerte (objeto limpio hasta su borde) u "
+             "objetos (pega el cuadro entero, sin recortar el menton ni los cachetes al contorno del destino, y solo "
+             "devuelve lo que tapa la cara: manos, microfono, cerquillo, lentes)",
     )
     process_parser.add_argument(
         "--nitidez", "--occlusion-mode",
@@ -221,7 +223,16 @@ def build_parser():
         default=0.0,
         metavar="FUERZA",
         help="lleva al destino el detalle de la piel de la foto fuente (pecas, lunares, arrugas, poros), de 0 a 1; "
-             "necesita una foto fuente (no un modelo .npy). Por defecto: 0 (desactivado)",
+             "necesita una foto fuente o un modelo .npy con imagen de piel. Por defecto: 0 (desactivado)",
+    )
+    process_parser.add_argument(
+        "--forma-cara",
+        type=_fuerza,
+        default=0.0,
+        metavar="FUERZA",
+        help="la cara del destino toma el ancho de la cara fuente (mandibula y cachetes: una cara ancha sobre una "
+             "delgada sale ancha), de 0 a 1; deforma el contorno antes de cambiar la cara. Necesita una foto fuente "
+             "casi de frente o un modelo .npy con forma. Por defecto: 0 (desactivado)",
     )
     process_parser.add_argument(
         "--makeup",
@@ -445,6 +456,7 @@ def _swap_frame(swapper, caras_src, frame, args):
         mejillas=args.mejillas,
         color_ojos=args.color_ojos,
         detalle_piel=args.detalle_piel,
+        forma=args.forma_cara,
         mascara=args.face_mask,
         color=args.color,
         maquillaje=args.makeup,
@@ -531,6 +543,7 @@ class _ModoIdentidad:
             mejillas=self.args.mejillas,
             color_ojos=self.args.color_ojos,
             detalle_piel=self.args.detalle_piel,
+            forma=self.args.forma_cara,
             mascara=self.args.face_mask,
             color=self.args.color,
             maquillaje=self.args.makeup,
@@ -597,6 +610,8 @@ def _firma_opciones(args):
         firma.pop("color_ojos", None)
     if not firma.get("detalle_piel"):
         firma.pop("detalle_piel", None)
+    if not firma.get("forma_cara"):
+        firma.pop("forma_cara", None)
     return firma
 
 
@@ -701,15 +716,21 @@ class _Detenido(Exception):
     pass
 
 
-def _cargar_caras_fuente(swapper, source):
-    """Caras fuente, una sola vez para todo el proceso: de uno o varios .npy, o detectadas en una imagen"""
+def _cargar_caras_fuente(swapper, source, piel=False, forma=False):
+    """Caras fuente, una sola vez para todo el proceso: de uno o varios .npy, o detectadas en una imagen.
+    Con piel=True (--detalle-piel) a cada modelo se le agrega la piel de su imagen de piel; con forma=True
+    (--forma-cara), a los modelos sin forma se les mide en su imagen de piel"""
     partes = [p.strip() for p in source.split(",") if p.strip()]
     if partes and all(Modelo_Cara.es_modelo(p) for p in partes):
         caras = [Modelo_Cara.cargar(os.path.abspath(p)) for p in partes]
-        for ruta in partes:
+        for ruta, cara in zip(partes, caras):
             datos = Modelo_Cara.datos(ruta)
             detalle = f" ({datos['caras_usadas']} caras)" if "caras_usadas" in datos else ""
             print(f"Modelo de cara: {os.path.basename(ruta)}{detalle}")
+            if piel and Modelo_Cara.agregar_piel(cara, swapper):
+                print(f"  Piel: {os.path.basename(cara['piel_firma'][0])}")
+            if forma and cara.get("forma") is None and Modelo_Cara.agregar_forma(cara, swapper):
+                print("  Forma: medida en su imagen de piel (guardada en el .json)")
         return caras
 
     source_path = os.path.abspath(source)
@@ -775,10 +796,21 @@ def run_crear_modelo(args):
         else:
             print("Aviso: solo se uso una cara; con 3 a 10 fotos distintas el parecido es mas estable")
         print(f"Miniatura: {os.path.splitext(salida)[0]}.jpg")
+        _avisar_piel(datos, salida)
         return 0
     except (FileNotFoundError, FileExistsError, ValueError, RuntimeError) as error:
         print(f"Error: {error}", file=os.sys.stderr)
         return 1
+
+
+def _avisar_piel(datos, salida):
+    """Dice de que cara salio la imagen de piel del modelo y que se puede cambiar"""
+    piel = datos.get("piel")
+    if piel is None:
+        print("Piel: no se guardo (ninguna cara servia); --detalle-piel no funcionara con este modelo")
+        return
+    print(f"Piel (--detalle-piel): de {piel['origen']} -> {os.path.join(os.path.dirname(salida), piel['imagen'])}")
+    print("  Para usar otra, reemplaza esa imagen por otra foto de la misma persona, de frente y nitida")
 
 
 def run_combinar_modelos(args):
@@ -794,6 +826,7 @@ def run_combinar_modelos(args):
         print(f"Similitud promedio entre los modelos: {datos['similitud_promedio']:.2f}")
         if datos["similitud_promedio"] >= 0.9:
             print("Aviso: los modelos son casi iguales; combinarlos aporta poco")
+        _avisar_piel(datos, salida)
         return 0
     except (FileNotFoundError, FileExistsError, ValueError) as error:
         print(f"Error: {error}", file=os.sys.stderr)
@@ -868,7 +901,14 @@ def run_cli(args):
 
         Analyzer_Faces.CARAS_INCLINADAS = not args.sin_inclinadas
         swapper = Swapper_Faces(model_path)
-        caras_src = _cargar_caras_fuente(swapper, args.source)
+        caras_src = _cargar_caras_fuente(swapper, args.source, piel=bool(args.detalle_piel),
+                                         forma=bool(args.forma_cara))
+        if args.forma_cara and all(c.get("forma") is None for c in caras_src):
+            if any(c.get("ruta_modelo") for c in caras_src):
+                print("Aviso: --forma-cara: el modelo no tiene forma ni una imagen de piel donde medirla (vuelve a "
+                      "crearlo o ponle una foto de frente con el boton Piel); no se aplica", flush=True)
+            else:
+                print("Aviso: --forma-cara necesita una foto fuente casi de frente; no se aplica", flush=True)
         if args.color_ojos == "fuente":
             sin_iris = [str(i) for i, c in enumerate(caras_src) if c.get("color_iris") is None]
             if len(sin_iris) == len(caras_src):
@@ -878,8 +918,14 @@ def run_cli(args):
                 print(f"Aviso: --color-ojos fuente: sin color de ojos en la(s) cara(s) fuente {', '.join(sin_iris)}",
                       flush=True)
         if args.detalle_piel and all(c.get("piel") is None for c in caras_src):
-            print("Aviso: --detalle-piel necesita una foto fuente con la cara de frente (un modelo .npy no guarda la "
-                  "piel); no se aplica", flush=True)
+            if any(c.get("piel_firma") for c in caras_src):
+                # Los modelos tienen imagen de piel pero no sirvio: agregar_piel ya dijo por que
+                print("Aviso: --detalle-piel no se aplica", flush=True)
+            elif any(c.get("ruta_modelo") for c in caras_src):
+                print("Aviso: --detalle-piel: el modelo no tiene imagen de piel (<modelo>.piel.png; los modelos creados "
+                      "antes no la tienen: vuelve a crearlo o pon una foto con ese nombre); no se aplica", flush=True)
+            else:
+                print("Aviso: --detalle-piel necesita una foto fuente con la cara de frente; no se aplica", flush=True)
         if es_carpeta:
             if args.start is not None or args.end is not None:
                 print("Aviso: --start y --end son solo para videos; en imagenes se ignoran", flush=True)
@@ -926,7 +972,7 @@ _CONFIG_A_OPCION = {
     "indices_fuente": "source_index", "indices_destino": "target_index",
     "mascara": "face_mask", "color": "color",
     "ojos": "eyes", "boca": "mouth", "nariz": "nose", "frente": "remove_bangs", "mejillas": "mejillas",
-    "color_ojos": "color_ojos", "detalle_piel": "detalle_piel",
+    "color_ojos": "color_ojos", "detalle_piel": "detalle_piel", "forma_cara": "forma_cara",
     "zip": "zip", "zip_conservar": "zip_conservar",
     "maquillaje": "makeup", "oclusion": "occlusion", "oclusion_modo": "oclusion_modo", "filtro": "occlusion_mode",
     "minimo_mejora": "enhance_min_size", "hilos": "threads",

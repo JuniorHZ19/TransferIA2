@@ -35,6 +35,7 @@ CORRIMIENTO_PERFIL = 0.1
 #   fuerte     ademas contrae la mascara (lo que queda bajo 50 % pasa a 0): el objeto queda limpio hasta su
 #              borde, pero la cara nueva retrocede unos pixeles junto al objeto
 MODOS_OCLUSION = ("debil", "adaptable", "fuerte")
+# (el modo "objetos" no usa frame_with_occlusion: lo resuelve Face_Swaper.cambiar_una con mascara_objetos)
 # adaptativo: la fuerza se busca para que el detalle de la cara llegue a esta fraccion del detalle del destino
 # (sin pasar de NITIDEZ_MAXIMA), y se agrega grano hasta GRANO_OBJETIVO del ruido del destino.
 NITIDEZ_OBJETIVO = 0.9

@@ -24,6 +24,7 @@ Transfer-IA es una aplicación de cambio facial que utiliza inteligencia artific
 - Opción para conservar las mejillas y los pómulos del destino (`--mejillas`)
 - Color de ojos: el iris con el color de la fuente o uno elegido (`--color-ojos`)
 - Detalle de piel: las pecas, lunares y arrugas de la fuente, sin sus sombras (`--detalle-piel`)
+- Forma de la cara: una cara ancha sobre una delgada sale ancha, sin recortar el mentón ni los cachetes (`--forma-cara`)
 - Conservar el maquillaje o la pintura de cara del destino (`--makeup`)
 - Mejorador de caras GPEN opcional para más nitidez en piel, ojos y dientes (`--enhance`)
 - Videos que se pueden detener y continuar después, aunque se corte la luz (`--resume`); sin imágenes temporales en disco y con poca RAM
@@ -110,14 +111,14 @@ En la interfaz principal:
      | **Caras** | **Asignación**: `posicion` (izquierda a derecha, como siempre) o `identidad` (ver [Asignación por identidad](#asignación-por-identidad---asignacion-identidad)). **Género destino**: `todos`, `mujer` u `hombre`. **Análisis de personas** (solo con `identidad`): frames por segundo (`1`) y máximo de frames (`300`) del análisis previo del video |
      | **Índices** | **Fuente** y **Destino**: qué cara fuente va en qué cara destino (`0`, `0,1`...). Una misma fuente puede ir a varias caras repitiendo su número: Fuente `0,0` y Destino `0,1` pone la cara 0 en las dos. En modo identidad con video, Destino es el número de persona (0 = la que más aparece); el botón **Ver personas...** muestra quién es cada una (ver [Asignación por identidad](#asignación-por-identidad---asignacion-identidad)) |
      | **Pegado** | **Máscara**: `normal`, `amplia` (por defecto) o `maxima`, cuánta zona de la cara se cambia (ver [Zona de la cara](#zona-de-la-cara---face-mask)). **Corrección de color**: `ninguna` (por defecto), `suave` o `completa`, iguala el color de la cara cambiada a la piel del destino (ver [Corrección de color](#corrección-de-color---color)) |
-     | **De la fuente** | **Color de ojos**: `ninguno` (por defecto), `fuente`, un color o «elegir color...» (ver [Color de ojos](#color-de-ojos---color-ojos)). **Detalle de piel**: deslizador de 0 (desactivado) a 1, las pecas, lunares y arrugas de la foto fuente (ver [Detalle de piel](#detalle-de-piel-de-la-fuente---detalle-piel)) |
+     | **De la fuente** | **Color de ojos**: `ninguno` (por defecto), `fuente`, un color o «elegir color...» (ver [Color de ojos](#color-de-ojos---color-ojos)). **Detalle de piel**: deslizador de 0 (desactivado) a 1, las pecas, lunares y arrugas de la foto fuente (ver [Detalle de piel](#detalle-de-piel-de-la-fuente---detalle-piel)). **Forma de la cara**: deslizador de 0 (desactivado) a 1, el contorno del destino toma el ancho de la fuente (ver [Forma de la cara](#forma-de-la-cara---forma-cara)) |
      | **Del destino** | **Ojos / Boca / Nariz**: cambia la cara pero deja esas partes originales del destino (ver [ojos](#conservar-ojos-del-destino), [boca](#conservar-boca-del-destino---mouth) y [nariz](#conservar-nariz-del-destino---nose)). **Frente (quitar cerquillo)**: la frente queda la del destino, para cuando la fuente tiene cerquillo (ver [Quitar el cerquillo](#quitar-el-cerquillo-de-la-fuente---remove-bangs)). **Mejillas y pómulos**: las mejillas quedan las del destino (ver [Conservar mejillas](#conservar-mejillas-y-pómulos-del-destino---mejillas)). **Maquillaje**: deslizador de 0 (desactivado) a 1; devuelve el maquillaje o la pintura de cara del destino (ver [Conservar maquillaje](#conservar-maquillaje---makeup)) |
-     | **Oclusión** | **Activar**: deja el pelo, las manos y los objetos delante de la cara. **Modo**: `debil`, `adaptable` (por defecto) o `fuerte`, cuánta cara puede quedar sobre lo que la tapa (ver [Modo de la oclusión](#modo-de-la-oclusión---oclusion-modo)) |
+     | **Oclusión** | **Activar**: deja el pelo, las manos y los objetos delante de la cara. **Modo**: `debil`, `adaptable` (por defecto), `fuerte` u `objetos` (pega el cuadro entero y solo devuelve lo que tapa la cara), cuánta cara puede quedar sobre lo que la tapa (ver [Modo de la oclusión](#modo-de-la-oclusión---oclusion-modo)) |
      | **Nitidez** | **Filtro**: `None`, `natural`, `strong` o `adaptativo` (recomendado). Funciona con o sin la oclusión (ver [Nitidez de la cara](#nitidez-de-la-cara---nitidez)) |
      | **Mejora** | **Mejorar cara (GPEN)** + **Fuerza**: pasa la cara cambiada por el mejorador GPEN para más nitidez; la fuerza va de 0.1 a 1 (0.8 por defecto); tarda unos 0.25 s más por cara. **Cara mínima** + unidad (`px` o `% imagen`): caras más chicas no se mejoran; `96 px` por defecto, o proporcional a la imagen, como `25 % imagen` (ver [Mejorador de caras](#mejorador-de-caras-gpen---enhance)) |
 
    - Opcional, debajo de la imagen de origen:
-     - **Elegir modelos...**: marca uno o varios modelos de cara de `src/modelos_caras/` y ordénalos; el orden es su índice fuente (0, 1, 2...). Con muchos modelos la lista tiene barra de desplazamiento (y rueda del mouse), así la ventana no crece más que la pantalla. Cada modelo tiene un botón **Eliminar** (ver [Eliminar un modelo](#eliminar-un-modelo))
+     - **Elegir modelos...**: marca uno o varios modelos de cara de `src/modelos_caras/` y ordénalos; el orden es su índice fuente (0, 1, 2...). Con muchos modelos la lista tiene barra de desplazamiento (y rueda del mouse), así la ventana no crece más que la pantalla. Arriba hay una caja **Buscar** que filtra los modelos mientras escribes (sin importar tildes ni mayúsculas; Enter marca el único resultado, Esc borra la búsqueda). Cada modelo tiene un botón **Eliminar** (ver [Eliminar un modelo](#eliminar-un-modelo))
      - **Crear modelo de cara**: crea un modelo con varias fotos o un collage de la misma persona (también se puede arrastrar varias fotos o una carpeta a la zona de origen)
      - **Desde video**: crea un modelo con los frames de uno o varios videos de la persona; se elige cuántos frames por segundo sacar (también se puede arrastrar el video a la zona de origen). Ver [Crear un modelo desde un video](#crear-un-modelo-desde-un-video)
      - **Combinar modelos**: une varios modelos de la misma persona en uno nuevo (ver [Combinar modelos](#combinar-modelos-de-la-misma-persona))
@@ -230,7 +231,8 @@ Opciones de `process`:
 --personas-max N           con identidad en video: maximo de frames del analisis, repartidos en todo
                            el video (300)
 --occlusion                activa el modelo de oclusion (pelo, manos y objetos delante de la cara)
---oclusion-modo MODO       con --occlusion: debil (como antes), adaptable (por defecto) o fuerte
+--oclusion-modo MODO       con --occlusion: debil (como antes), adaptable (por defecto), fuerte u
+                           objetos (cuadro entero, sin recortar el menton ni los cachetes)
                            (ver Modo de la oclusion)
 --nitidez MODO             nitidez de la cara pegada, con o sin --occlusion: None, natural, strong o
                            adaptativo (iguala el detalle y el grano del destino; recomendado).
@@ -250,6 +252,8 @@ Opciones de `process`:
 --color-ojos COLOR         color del iris: fuente, azul, verde, miel, gris, marron o #RRGGBB
                            (por defecto: ninguno)
 --detalle-piel FUERZA      0 (por defecto) a 1: pecas, lunares y arrugas de la foto fuente
+--forma-cara FUERZA        0 (por defecto) a 1: el contorno del destino toma el ancho de la fuente
+                           (mandibula y cachetes); necesita una fuente casi de frente o un modelo
 --makeup FUERZA            0 (por defecto, desactivado) a 1: conserva el maquillaje o la pintura de cara
                            del destino (Halloween, catrina, pintura artística); más fuerza = más
                            maquillaje y menos parecido con la fuente. Recomendado: 0.7 a 1
@@ -287,7 +291,8 @@ Opciones de `crear-modelo`:
 ```text
 --fotos PATH [PATH ...]    imágenes y/o carpetas con fotos de la misma persona
                            (un collage puede tener varias caras; se usan todas)
---output PATH              archivo .npy a crear; al lado se guardan una miniatura .jpg y un .json
+--output PATH              archivo .npy a crear; al lado se guardan una miniatura .jpg, un .json
+                           y la imagen de piel .piel.png (para --detalle-piel)
 --overwrite                reemplaza el modelo si ya existe
 ```
 
@@ -451,12 +456,14 @@ Para que no se vea un corte en el borde, la máscara de la oclusión se difumina
 | `debil` | En el borde ~46 %, dentro 7-16 % (lo que se veía antes) | Igual que antes |
 | `adaptable` (por defecto) | Dentro **0 %**; solo una transición corta en el borde exacto (~30 %) | **Igual que antes** |
 | `fuerte` | **0 %**, hasta el borde | La cara nueva retrocede unos píxeles junto al objeto (puede asomar la cara original) |
+| `objetos` | **0 %** donde el objeto tapa la cara | **Cuadro entero** de inswapper: no se recorta al contorno del destino |
 
 (Medido con una máscara sintética: cara con una barra de 40 px delante.)
 
 - **`adaptable`**: la cara nunca se pinta más de lo que el modelo de oclusión marca como cara; el difuminado solo puede suavizar hacia la piel. Es el recomendado: arregla la cara sobre los objetos sin cambiar nada más.
 - **`fuerte`**: además contrae la máscara (lo que queda bajo 50 % pasa a 0). Para objetos finos (dedos, cables, pelo) donde con `adaptable` todavía se note el borde.
 - **`debil`**: el comportamiento anterior, por si un video ya hecho debe salir igual.
+- **`objetos`**: los otros modos nunca pintan cara fuera de la piel que el modelo de oclusión ve en el destino; si inswapper dibujó la mejilla o el mentón un poco más afuera (una cara ancha sobre una delgada), ese borde se corta (en las pruebas, `adaptable` deja el 70 % del cuadro en esa zona). `objetos` pega el **cuadro entero** (100 %) y del destino solo devuelve **lo que tapa la cara**: la silueta de la cara (contorno de la máscara, los 106 puntos y la frente) menos la piel visible. Así una mano, un micrófono, unos lentes o el cerquillo del destino siguen delante. Límites: un objeto que pasa por el cuadro **fuera** de la cara (junto a la oreja) queda tapado, y en algunas caras se nota el borde del cuadro sobre el pelo o la oreja. Combínalo con [Forma de la cara](#forma-de-la-cara---forma-cara).
 - Si con cualquier modo se sigue viendo la cara sobre un objeto, puede que el modelo no lo detecte (objetos finos, transparentes o del color de la piel). Para saberlo: **Preview** → **Ver máscara**; si el objeto aparece pintado de verde, el modelo lo tomó como cara.
 - Los videos a medias hechos antes de esta opción se continúan solo con `debil`; con otro modo hay que empezarlos de cero (para que no cambien a mitad del video).
 
@@ -592,10 +599,28 @@ python cli.py process --source "src/cara_con_pecas.jpg" --target "src/video.mp4"
 - Se llevan solo los **rasgos**: lo fino (poros, pecas chicas, arrugas finas) y las manchas redondeadas hasta el tamaño de un lunar. No pasan las sombras de la cara fuente (costado de la nariz, surcos de la sonrisa, ojeras) ni, si la fuente es un hombre, la barba o el bigote.
 - Cada rasgo va a su lugar con una malla de triángulos sobre los 106 puntos de la cara (más unos puntos en la frente), aunque las dos caras tengan distinta forma o giro.
 - Va después de GPEN y antes de la oclusión: el pelo o las manos sobre la cara quedan del destino. Sin `--occlusion` igual se calcula la máscara de la cara (algo más lento).
-- Necesita una foto: un modelo `.npy` no guarda la piel (el programa avisa y no la aplica).
+- Funciona con una foto fuente o con un **modelo `.npy`** que tenga imagen de piel (`<modelo>.piel.png`, se guarda sola al crear el modelo; ver [Piel del modelo](#piel-del-modelo---detalle-piel)). Con un modelo creado antes de esta función el programa avisa y no la aplica.
 - Límites: las arrugas finas se conservan al 75 %; un lunar dentro de la barba de un hombre se va con ella; con un destino mucho más chico que la fuente las pecas muy finas casi no se ven.
 
 Ajustes en el código: las constantes al principio de `core/Piel.py` (`RASGO_FINO`, `RASGO_GRANDE`, `FORMA_MANCHA`, `MANCHA_CONTRASTE`, `BARBA`...).
+
+### Forma de la cara (`--forma-cara`)
+
+inswapper no cambia la forma de la cabeza: dibuja la identidad de la fuente **dentro del contorno del destino**. Por eso una cara muy ancha puesta sobre una muy delgada sale delgada, con el mentón y los cachetes recortados. Con `--forma-cara FUERZA` (0 a 1; o el deslizador **Forma de la cara** de la fila «De la fuente» en la interfaz) el contorno del destino se ensancha (o angosta) **antes** del cambio, hasta el ancho de la fuente.
+
+```bash
+python cli.py process --source "src/cara_ancha.jpg" --target "src/video.mp4" --output "output/resultado.mp4" --forma-cara 1 --occlusion --oclusion-modo objetos
+```
+
+- **Qué se mueve:** solo la mandíbula y los cachetes (desde el 15 % de la altura de la cara hacia abajo). Los ojos, la nariz, la boca, la frente y el fondo quedan en su lugar; no se estira la imagen entera.
+- **Cómo se mide:** el ancho del contorno a 16 alturas, en distancias entre ojos (no depende del tamaño de la cara). La fuente debe estar casi de frente (menos de 25° de giro); si no, avisa y no deforma.
+- **Cómo se deforma:** con un *thin-plate spline* (una lámina elástica) sobre los 33 puntos del contorno, con los rasgos fijos; el efecto se apaga lejos de la cara. El cambio está limitado a 1,4 veces.
+- **Caras giradas:** la fuerza baja entre 20° y 35° de giro del destino y desde 35° no se deforma, para que en video no salte.
+- **Modelos `.npy`:** al crear o combinar un modelo se guarda su forma en el `.json`. A un modelo creado antes se le mide en su imagen de piel (`.piel.png`) la primera vez y se guarda.
+- **Resultados (caras de IA):** ancho de la mitad de abajo, fuente 1,23 y destino 1,01: sin la opción 1,06, con 1 → 1,13 (a la vista, claramente más ancha). El parecido con la fuente no baja (0,658 → 0,673). Unos 1,1 s más por imagen en CPU.
+- **Límites:** se calcula frame por frame; si en un video tiembla, déjala en 0 y usa solo la oclusión `objetos`. No probado aún en videos reales ni en GPU.
+
+Ajustes en el código: las constantes al principio de `core/Forma.py` (`CAMBIO_MAXIMO`, `DESDE`, `GIRO`, `GIRO_MEDIR`, `RADIO`).
 
 ### Quitar el cerquillo de la fuente (`--remove-bangs`)
 
@@ -766,7 +791,7 @@ Al crearlo:
 
 - Se detectan todas las caras (un collage puede tener varias) y se descartan las borrosas, pequeñas o de perfil.
 - Si se cuela otra persona, sus caras se descartan y se avisa: se usa la persona que más se repite.
-- Se guardan tres archivos: `persona1.npy` (el vector), `persona1.jpg` (miniatura para reconocerlo) y `persona1.json` (fotos usadas, caras descartadas y similitud promedio entre caras; desde 0.5 es buena).
+- Se guardan cuatro archivos: `persona1.npy` (el vector), `persona1.jpg` (miniatura para reconocerlo), `persona1.json` (fotos usadas, caras descartadas y similitud promedio entre caras; desde 0.5 es buena) y `persona1.piel.png` (la cara más de frente y nítida, para `--detalle-piel`; ver [Piel del modelo](#piel-del-modelo---detalle-piel)).
 - Con 3 a 10 fotos nítidas y con luces o expresiones distintas alcanza.
 
 **Qué fotos usar** (importa más la variedad y la calidad que la cantidad):
@@ -877,7 +902,7 @@ python cli.py process --source "src/modelos_caras/persona1.npy,src/modelos_caras
 - **Índices Fuente** se refiere a ese orden, igual que con una imagen de varias caras: con `0,1` en Índices Fuente y `0,1` en Índices Destino, la cara 0 del destino recibe `ana` y la 1 recibe `luis`; con `1,0` se invierten.
 - Funciona igual en modo `identidad`.
 - Antes de procesar se valida que los índices existan: con 2 modelos, un índice `2` muestra un error en vez de fallar a mitad del video.
-- **Elegir modelos...** abre una ventana con los modelos de `src/modelos_caras/`: se marcan los que se quieren usar y se ordenan con ↑ ↓; el orden es el índice.
+- **Elegir modelos...** abre una ventana con los modelos de `src/modelos_caras/`: se marcan los que se quieren usar y se ordenan con ↑ ↓; el orden es el índice. La caja **Buscar** de arriba filtra la lista mientras escribes («maria» encuentra «MARÍA JOSÉ»); los marcados siguen marcados aunque queden ocultos.
 
 Debajo de la zona de origen están los botones **Elegir modelos...**, **Crear modelo de cara**, **Desde video**, **Combinar modelos** y **Quitar**.
 
@@ -886,7 +911,7 @@ Debajo de la zona de origen están los botones **Elegir modelos...**, **Crear mo
 En la ventana de **Elegir modelos...** (y también en la de **Combinar modelos**) cada modelo tiene, a la derecha, un botón **Eliminar**:
 
 1. Pregunta antes: *«¿Eliminar el modelo «ana»?»*, con **No** como opción por defecto. Con **No** no se borra nada.
-2. Con **Sí** se borran sus tres archivos de `src/modelos_caras/`: `ana.npy` (la identidad), `ana.json` (sus datos) y `ana.jpg` (la miniatura). **No se puede deshacer**: para volver a tenerlo hay que crearlo otra vez con sus fotos.
+2. Con **Sí** se borran sus archivos de `src/modelos_caras/`: `ana.npy` (la identidad), `ana.json` (sus datos), `ana.jpg` (la miniatura) y `ana.piel.png` (la imagen de piel). **No se puede deshacer**: para volver a tenerlo hay que crearlo otra vez con sus fotos.
 3. Desaparece de la lista y, si estaba cargado como fuente, se quita de las fuentes; los demás siguen en su orden (sus índices se corren: si se elimina el 0, el que era 1 pasa a ser 0). Si era la única fuente, el origen queda vacío.
 
 Los otros modelos y las fotos con las que se crearon no se tocan.
@@ -906,13 +931,25 @@ Cómo funciona:
 - **Cada modelo pesa según cuántas caras tiene** (dato del `.json`; si no tiene `.json` cuenta como 1). Si `ana_1` tiene 4 caras y `ana_2` 12, `ana_2` pesa el triple. El resultado es prácticamente igual a haber creado un modelo con todas las fotos juntas (en las pruebas: similitud 0.9996).
 - **Comprueba que sea la misma persona:** si un modelo no se parece a los demás (similitud menor a 0.35), no combina nada y avisa cuál es.
 - **Los originales no se modifican**, y el nombre del nuevo debe ser distinto al de los que se combinan.
-- Se guarda como un modelo normal: `.npy`, la miniatura del modelo con más caras y un `.json` con el total de caras y de qué modelos salió (`combinado_de`, con la similitud de cada uno con el resultado).
+- Se guarda como un modelo normal: `.npy`, la miniatura y la imagen de piel del modelo con más caras (la piel no se mezcla: las pecas quedarían borrosas) y un `.json` con el total de caras y de qué modelos salió (`combinado_de`, con la similitud de cada uno con el resultado).
 
 ¿Cuándo mejora? Igual que agregar fotos: ayuda si los modelos tienen pocas caras (por ejemplo 3 + 4) o si salieron de fotos de épocas, luces o estilos distintos. Si cada modelo ya tiene 15 o 20 caras, o si son casi iguales (similitud entre ellos de 0.9 o más; el programa lo avisa), aporta muy poco.
 
+#### Piel del modelo (`--detalle-piel`)
+
+El `.npy` solo guarda la identidad (512 números), sin imagen, así que no tiene pecas ni lunares. Por eso, **al crear el modelo**, mientras las fotos todavía están abiertas, se guarda también `<modelo>.piel.png`: una foto de la cara más de frente y nítida (puntaje = de frente y grande × nitidez). Con `--detalle-piel` (o el deslizador **Detalle de piel**) el detalle de piel sale de esa imagen.
+
+- **Saber cuál eligió:** al crear el modelo lo dice (`Piel (--detalle-piel): de b_nitida.jpg -> ...ana.piel.png`, o el segundo del video), y queda en el `.json` (`"piel": {"imagen", "origen"}`).
+- **Cambiarla:** pon otra foto de la **misma persona**, de frente y nítida, con el nombre `<modelo>.piel.png` (o `.jpg`, `.webp`) en `src/modelos_caras/`. Si hay varias, se usa **la más nueva**. En la interfaz: **Elegir modelos...** → botón **Piel** del modelo → **Sí** para verla, **No** para elegir otra foto (borra la anterior y copia la nueva).
+- **Se comprueba la persona:** al usar el modelo se busca en la imagen la cara que más se parece; si no es la misma persona (similitud menor a 0.35) avisa y no usa la piel.
+- Se vuelve a leer cuando la imagen cambia, incluso con la interfaz abierta.
+- **Modelos creados antes:** no tienen imagen de piel; vuelve a crearlos o ponles una foto con el botón **Piel**.
+- Usa una foto original: una copia guardada varias veces en JPG agrega ruido que parece poros.
+- Si el modelo se creó desde la carpeta de **Extraer caras**, la imagen de piel es un recorte de 384 px y las pecas finas se ven menos que con la foto o el video original.
+
 Notas:
 
-- Solo el `.npy` es necesario: el `.json` y el `.jpg` son opcionales (sin `.jpg`, la interfaz muestra el nombre en lugar de la miniatura).
+- Solo el `.npy` es necesario: el `.json`, el `.jpg` y el `.piel.png` son opcionales (sin `.jpg`, la interfaz muestra el nombre en lugar de la miniatura; sin `.piel.png`, no hay detalle de piel).
 - El `.npy` no es una imagen y no se puede convertir en foto; la miniatura `.jpg` es solo para reconocerlo. Aplicar el modelo sobre una foto da una imagen parecida a esa identidad, pero no equivalente: si se usa esa imagen como origen, se pierde parte del parecido. Para cambiar caras, use siempre el `.npy`.
 - Sirve mientras se use el mismo modelo de reconocimiento (`buffalo_l`); si cambia, el programa avisa y conviene volver a crearlo.
 - Es un dato biométrico: guárdelo con el mismo cuidado que las fotos. Los modelos se guardan en `src/modelos_caras/` (no en `models/`, que es solo para los modelos `.onnx`); `src/` no se sube a git.

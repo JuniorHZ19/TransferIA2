@@ -7,6 +7,7 @@ from insightface.app.common import Face
 import array
 from core.Face_Analyzer import Analyzer_Faces
 from core.xseg import DFL_XSeg_Model
+from core import Forma
 from core.Identidades import Registro_Identidades
 from core.Mejorador import Mejorador_Cara, MEZCLA, MINIMO_POR_DEFECTO
 from core import Iris, Piel
@@ -66,6 +67,16 @@ PERFIL_ALCANCE = 0.25
 # "amplia" y "maxima" cubren mas mejillas, menton y frente, asi el resultado se parece mas a la fuente.
 MASCARAS = {"normal": (0.10, 0.05), "amplia": (0.05, 0.035), "maxima": (0.02, 0.025)}
 
+# Oclusion modo "objetos": se pega el cuadro entero de inswapper (como sin oclusion: el menton y los cachetes no se
+# recortan al contorno del destino) y solo vuelve del destino lo que tapa la cara. "Lo que tapa" = lo que esta
+# dentro de la silueta de la cara (envolvente del contorno de XSeg, los 106 puntos y la frente: las cejas subidas
+# OBJETOS_FRENTE distancias entre ojos) y XSeg no marca como cara. Entrantes mas finos que OBJETOS_FINO son la forma
+# de la cara, no un objeto. El borde se difumina OBJETOS_DIFUMINADO. Fuera de la silueta no hay como saber si algo
+# esta delante: ahi manda el cuadro
+OBJETOS_FRENTE = 0.55
+OBJETOS_FINO = 0.08
+OBJETOS_DIFUMINADO = 0.05
+
 class Swapper_Faces:
 
     '''
@@ -100,13 +111,16 @@ class Swapper_Faces:
         return  self.__class__._SWAPPER_MODEL
     
 
-    def cambiar_Faces(self,frame_dst,frame_src=None,index_src="0",index_dst="0",oclution=True,mode="None",genero="todos",ojos=False,mascara="amplia",caras_src=None,boca=False,color="ninguna",nariz=False,maquillaje=0.0,mejorar=0.0,devolver_mascara=False,mejorar_minimo=MINIMO_POR_DEFECTO,frente=False,oclusion_modo="adaptable",mejillas=False,color_ojos=None,detalle_piel=0.0):
+    def cambiar_Faces(self,frame_dst,frame_src=None,index_src="0",index_dst="0",oclution=True,mode="None",genero="todos",ojos=False,mascara="amplia",caras_src=None,boca=False,color="ninguna",nariz=False,maquillaje=0.0,mejorar=0.0,devolver_mascara=False,mejorar_minimo=MINIMO_POR_DEFECTO,frente=False,oclusion_modo="adaptable",mejillas=False,color_ojos=None,detalle_piel=0.0,forma=0.0):
 
         '''
          caras_src: caras fuente ya preparadas (de una foto o de modelos .npy); si es None se detectan en frame_src.
         color_ojos: color al que se llevan los iris (ver Iris.color_objetivo); None = no se cambia.
+        forma: de 0 a 1, cuanto toma la cara del destino el ancho de la cara fuente (mandibula y cachetes, ver
+        core/Forma.py); la fuente necesita "forma" (una foto, o un modelo .npy que la tenga).
         detalle_piel: de 0 a 1, cuanto del detalle de la piel de la fuente (pecas, lunares, arrugas) se lleva al
-        destino (ver core/Piel.py); necesita una foto fuente, no un modelo .npy.
+        destino (ver core/Piel.py); con una foto fuente, o con un modelo .npy que tenga imagen de piel
+        (Modelo_Cara.agregar_piel).
         Con devolver_mascara=True devuelve (frame, mascara): la zona que de verdad cambio, de 0 a 1 (ver cambiar_una)
         '''
      
@@ -137,7 +151,7 @@ class Swapper_Faces:
          fake_frame, alfa = self.cambiar_una(frame_dst, caras_src[indice_src], caras_dst[indice_dst], oclution, mode,
                                              ojos, mascara, boca, color, nariz, maquillaje, mejorar, devolver_mascara,
                                              mejorar_minimo, frente, oclusion_modo, mejillas=mejillas,
-                                             color_ojos=color_ojos, detalle_piel=detalle_piel)
+                                             color_ojos=color_ojos, detalle_piel=detalle_piel, forma=forma)
          if devolver_mascara:
             mascara_total = np.maximum(mascara_total, alfa)
 
@@ -148,10 +162,10 @@ class Swapper_Faces:
     def cambiar_una(self, frame, cara_src, cara_dst, oclution=True, mode="None", ojos=False, mascara="amplia",
                     boca=False, color="ninguna", nariz=False, maquillaje=0.0, mejorar=0.0, devolver_mascara=False,
                     mejorar_minimo=MINIMO_POR_DEFECTO, frente=False, oclusion_modo="adaptable", mejillas=False,
-                    color_ojos=None, detalle_piel=0.0):
+                    color_ojos=None, detalle_piel=0.0, forma=0.0):
 
         '''
-         Cambia una sola cara: pegado (+ color + maquillaje) -> GPEN -> detalle de la piel de la fuente -> oclusion
+         Cambia una sola cara: forma de la fuente (deforma el contorno del destino) -> pegado (+ color + maquillaje) -> GPEN -> detalle de la piel de la fuente -> oclusion
         -> partes del destino -> color de los ojos.
         Devuelve (frame, alfa). Con devolver_mascara=True, alfa es cuanto cambio cada pixel respecto de "frame"
         (0 = queda el destino, 1 = todo nuevo), combinando las mascaras de cada paso; si no, alfa es None.
@@ -161,7 +175,17 @@ class Swapper_Faces:
         d = devolver_mascara
         alfa = None
         # Filtro de nitidez sin oclusion: se aplica dentro de la zona pegada (con oclusion, dentro de su mascara)
-        solo_nitidez = not oclution and mode in FILTROS_NITIDEZ
+        # (en el modo "objetos" tambien: ahi se pega el cuadro entero, no la mascara de XSeg)
+        objetos = oclution == True and oclusion_modo == "objetos"
+        solo_nitidez = (not oclution or objetos) and mode in FILTROS_NITIDEZ
+
+        # Forma de la fuente: primero se deforma el contorno del destino (mandibula y cachetes) y todo lo demas
+        # trabaja sobre ese frame y esa cara, como si el destino ya tuviera esa forma
+        movido = None
+        if forma and cara_src.get("forma") is not None:
+            ajuste = Forma.ajustar(frame, cara_src["forma"], cara_dst, forma, devolver_mascara=d)
+            frame, cara_dst = ajuste[0], ajuste[1]
+            movido = ajuste[2] if d else None
 
         fake_frame, zona = self.pegar_cara(frame, cara_src, cara_dst, mascara, color, maquillaje, devolver_zona=True)
         alfa = zona if d else None
@@ -193,7 +217,21 @@ class Swapper_Faces:
                 if p is not None:
                     alfa = np.maximum(alfa, p)
 
-        if oclution == True:
+        if objetos:
+            # Cuadro entero de inswapper (no se recorta al contorno del destino); solo vuelve del destino lo que tapa
+            # la cara (mano, microfono, cerquillo, lentes)
+            if solo_nitidez:
+                fake_frame = self.aplicar_nitidez(frame, fake_frame, cara_dst, mode, zona)
+            if mascara_cara is None:
+                with self.__class__._LOCK:
+                    mascara_cara = self.__class__._XSEG_MODEL.get_complete_mask(frame, cara_dst)
+            tapado = self.mascara_objetos(mascara_cara, cara_dst)
+            if tapado is not None:
+                t = tapado[..., None]
+                fake_frame = np.clip(fake_frame * (1 - t) + frame * t, 0, 255).astype(np.uint8)
+                if d:
+                    alfa = alfa * (1 - tapado)
+        elif oclution == True:
             with self.__class__._LOCK:
                 fake_frame = self.__class__._XSEG_MODEL.frame_with_occlusion(frame=frame, fake_frame=fake_frame,
                                                                               face=cara_dst, mode=mode,
@@ -223,6 +261,8 @@ class Swapper_Faces:
                 if c is not None:
                     alfa = np.maximum(alfa, c)
 
+        if d and movido is not None:
+            alfa = np.maximum(alfa, movido)  # lo que la deformacion movio tambien cambio
         return fake_frame, (np.clip(alfa, 0, 1).astype(np.float32) if d else None)
 
 
@@ -458,6 +498,7 @@ class Swapper_Faces:
            despues solo queda el vector de la cara y ya no la foto'''
         caras = self.detectar_caras(frame)
         for cara in caras:
+            cara["forma"] = Forma.medir(cara)  # para --forma-cara (None si esta muy girada)
             cara["color_iris"] = Iris.color_iris(frame, cara)
             with self.__class__._LOCK:
                 mascara = self.__class__._XSEG_MODEL.get_complete_mask(frame, cara)
@@ -465,11 +506,26 @@ class Swapper_Faces:
         return caras
 
 
+    def piel_de_imagen(self, imagen, embedding):
+
+        '''Detalle de piel (Piel.preparar_fuente) de la cara de "imagen" que mas se parece a "embedding" (la imagen
+           de piel de un modelo .npy). Devuelve (piel o None, similitud); (None, None) si no hay caras'''
+        caras = self.detectar_caras(imagen)
+        if not caras:
+            return None, None
+        similitudes = [float(c.normed_embedding @ embedding) for c in caras]
+        i = int(np.argmax(similitudes))
+        with self.__class__._LOCK:
+            mascara = self.__class__._XSEG_MODEL.get_complete_mask(imagen, caras[i])
+        return Piel.preparar_fuente(imagen, caras[i], mascara), similitudes[i]
+
+
     def cambiar_Faces_por_identidad(self, frame_dst, caras_src, mapa, refs, caras_dst=None,
                                     oclution=True, mode="None", genero="todos", ojos=False, mascara="amplia",
                                     boca=False, color="ninguna", nariz=False, maquillaje=0.0, mejorar=0.0,
                                     devolver_mascara=False, mejorar_minimo=MINIMO_POR_DEFECTO, frente=False,
-                                    oclusion_modo="adaptable", mejillas=False, color_ojos=None, detalle_piel=0.0):
+                                    oclusion_modo="adaptable", mejillas=False, color_ojos=None, detalle_piel=0.0,
+                                    forma=0.0):
 
         '''
          Cambia las caras emparejando por identidad y no por posicion. "mapa" es {identidad_destino: indice_fuente},
@@ -493,7 +549,7 @@ class Swapper_Faces:
             fake_frame, alfa = self.cambiar_una(fake_frame, caras_src[indice_src], cara_dst, oclution, mode, ojos,
                                                 mascara, boca, color, nariz, maquillaje, mejorar, devolver_mascara,
                                                 mejorar_minimo, frente, oclusion_modo, mejillas=mejillas,
-                                                color_ojos=color_ojos, detalle_piel=detalle_piel)
+                                                color_ojos=color_ojos, detalle_piel=detalle_piel, forma=forma)
             if devolver_mascara:
                 mascara_total = np.maximum(mascara_total, alfa)
 
@@ -811,6 +867,54 @@ class Swapper_Faces:
         centro, _, v, d = Swapper_Faces._ejes_cara(cara)
         cejas = np.concatenate([puntos[list(r)] for r in CEJAS_106]).astype(np.float32)
         return float(np.percentile((cejas - centro) @ v, 20)) / d
+
+
+    @staticmethod
+    def mascara_objetos(mascara_cara, cara):
+
+        '''Lo que tapa la cara en el destino (0 a 1, tamaño del frame) para el modo de oclusion "objetos": dentro de
+        la silueta de la cara y fuera de la mascara de XSeg (ver OBJETOS_FRENTE). None si no se puede calcular'''
+
+        if mascara_cara is None or getattr(cara, "kps", None) is None:
+            return None
+        d = Swapper_Faces._ejes_cara(cara)[3]
+        if d < 2:
+            return None
+        piel = (mascara_cara > 127).astype(np.uint8)
+        puntos = [cara.kps.astype(np.float32)]
+        contornos, _ = cv2.findContours(piel, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contornos:
+            puntos.append(max(contornos, key=cv2.contourArea).reshape(-1, 2).astype(np.float32))
+        lm = cara.get("landmark_2d_106")
+        if lm is not None:
+            lm = lm.astype(np.float32)
+            puntos.append(lm)
+            arriba = -Swapper_Faces._ejes_cara(cara)[2] * OBJETOS_FRENTE * d  # hacia la frente
+            cejas = lm[list(CEJAS_106[0]) + list(CEJAS_106[1])]
+            puntos.append(cejas + arriba.astype(np.float32))
+        puntos = np.vstack(puntos)
+        alto, ancho = piel.shape
+        margen = int(3 * OBJETOS_DIFUMINADO * d) + 2
+        x, y, w, h = cv2.boundingRect(puntos.astype(np.int32))
+        x1, y1 = max(0, x - margen), max(0, y - margen)
+        x2, y2 = min(ancho, x + w + margen), min(alto, y + h + margen)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        silueta = np.zeros((y2 - y1, x2 - x1), np.uint8)
+        cv2.fillConvexPoly(silueta, cv2.convexHull((puntos - [x1, y1]).astype(np.int32)), 1)
+        tapado = silueta & (1 - piel[y1:y2, x1:x2])
+        fino = max(1, int(round(OBJETOS_FINO * d)))
+        tapado = cv2.morphologyEx(tapado, cv2.MORPH_OPEN,
+                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * fino + 1, 2 * fino + 1)))
+        resultado = np.zeros((alto, ancho), np.float32)
+        if tapado.any():
+            # Se agranda un poco antes de difuminar: asi el objeto entero vuelve del destino y el difuminado cae
+            # sobre la cara, no sobre el borde del objeto
+            sigma = max(0.8, OBJETOS_DIFUMINADO * d)
+            r = max(1, int(round(sigma)))
+            tapado = cv2.dilate(tapado, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+            resultado[y1:y2, x1:x2] = cv2.GaussianBlur(tapado.astype(np.float32), (0, 0), sigma)
+        return resultado
 
 
     @staticmethod

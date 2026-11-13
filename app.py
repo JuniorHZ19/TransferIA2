@@ -9,6 +9,7 @@ import threading
 import time
 import subprocess
 import sys
+import unicodedata
 from core.Face_Swaper import Swapper_Faces
 from core.Face_Analyzer import Analyzer_Faces
 from core.Identidades import Registro_Identidades
@@ -1078,6 +1079,18 @@ class FaceSwapApp:
         self.detalle_piel_var.trace_add("write", lambda *_: detalle_valor.configure(
             text=f"{self.detalle_piel_var.get():.2f}"))
         detalle_valor.pack(side=tk.LEFT, padx=(5, 0))
+        # Ancho de la cara fuente: deforma la mandibula y los cachetes del destino antes de cambiar (0 = desactivado)
+        ttk.Label(fuente_fila, text="Forma de la cara:").pack(side=tk.LEFT, padx=(20, 5))
+        self.forma_cara_var = tk.DoubleVar(value=0.0)
+        forma_valor = ttk.Label(fuente_fila, text="0.00", width=4)
+        ttk.Scale(fuente_fila, from_=0.0, to=1.0, variable=self.forma_cara_var, length=120).pack(side=tk.LEFT)
+        # Copia en un atributo: obtener_caras_src corre en los hilos que procesan y no debe leer variables de Tk
+        self._forma_activa = False
+        def forma_cambiada(*_):
+            forma_valor.configure(text=f"{self.forma_cara_var.get():.2f}")
+            self._forma_activa = self.forma_cara_var.get() > 0.004
+        self.forma_cara_var.trace_add("write", forma_cambiada)
+        forma_valor.pack(side=tk.LEFT, padx=(5, 0))
 
         # 4. Del destino: partes y maquillaje que se quedan como en el destino
         destino_fila = fila("Del destino:")
@@ -1112,7 +1125,7 @@ class FaceSwapApp:
         # Modo: cuanta cara puede quedar sobre lo que la tapa en el borde difuminado (ver xseg.MODOS_OCLUSION)
         ttk.Label(oclusion_fila, text="Modo:").pack(side=tk.LEFT, padx=(20, 5))
         self.oclusion_modo_var = tk.StringVar(value="adaptable")
-        ttk.Combobox(oclusion_fila, textvariable=self.oclusion_modo_var, values=["debil", "adaptable", "fuerte"],
+        ttk.Combobox(oclusion_fila, textvariable=self.oclusion_modo_var, values=["debil", "adaptable", "fuerte", "objetos"],
                      state="readonly", width=9).pack(side=tk.LEFT)
 
         # 6. Nitidez de la cara pegada: funciona con o sin oclusion
@@ -1332,6 +1345,7 @@ class FaceSwapApp:
             "mejillas": self.var_mejillas.get(),
             "color_ojos": self.color_ojos_var.get(),
             "detalle_piel": round(self.detalle_piel_var.get(), 3),
+            "forma_cara": round(self.forma_cara_var.get(), 3),
             "maquillaje": round(self.maquillaje_var.get(), 3),
             "oclusion": self.var_oclucion.get(),
             "oclusion_modo": self.oclusion_modo_var.get(),
@@ -1356,6 +1370,7 @@ class FaceSwapApp:
             "mascara": self.mascara_var, "color": self.color_var,
             "ojos": self.var_ojos, "boca": self.var_boca, "nariz": self.var_nariz, "frente": self.var_frente,
             "mejillas": self.var_mejillas, "color_ojos": self.color_ojos_var, "detalle_piel": self.detalle_piel_var,
+            "forma_cara": self.forma_cara_var,
             "maquillaje": self.maquillaje_var, "oclusion": self.var_oclucion, "mejorar": self.var_mejorar,
             "oclusion_modo": self.oclusion_modo_var,
             "fuerza_mejora": self.fuerza_gpen_var, "contenedor": self.contenedor_var, "codec": self.codec_var,
@@ -1572,6 +1587,16 @@ class FaceSwapApp:
         if combinar:
             ttk.Label(ventana, text="Marca los modelos de la MISMA persona. Cada uno pesa según cuántas caras tiene;\n"
                                     "los modelos originales no se modifican.").pack(padx=15, pady=(10, 0), anchor="w")
+        # Buscador: filtra la lista con cada letra (sin distinguir mayúsculas ni tildes). Los modelos ocultos
+        # conservan su casilla: marcar, buscar otro y marcarlo también funciona
+        busqueda_frame = ttk.Frame(ventana)
+        busqueda_frame.pack(fill=tk.X, padx=15, pady=(10, 0))
+        ttk.Label(busqueda_frame, text="Buscar:").pack(side=tk.LEFT)
+        busqueda_var = tk.StringVar()
+        busqueda = ttk.Entry(busqueda_frame, textvariable=busqueda_var, width=30)
+        busqueda.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        conteo_label = ttk.Label(busqueda_frame)
+        conteo_label.pack(side=tk.LEFT, padx=(5, 0))
         # Lista con barra de desplazamiento: con muchos modelos la ventana no crece mas alla de ALTO_LISTA
         contenedor = ttk.Frame(ventana)
         contenedor.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
@@ -1624,27 +1649,97 @@ class FaceSwapApp:
                 filas[i], filas[j] = filas[j], filas[i]
                 dibujar()
 
+        def sin_tildes(texto):
+            return "".join(c for c in unicodedata.normalize("NFD", texto.casefold()) if unicodedata.category(c) != "Mn")
+
+        def visibles():
+            """Índices (en filas) de los modelos cuyo nombre contiene lo buscado"""
+            buscado = sin_tildes(busqueda_var.get().strip())
+            return [i for i, (ruta, _) in enumerate(filas)
+                    if buscado in sin_tildes(os.path.splitext(os.path.basename(ruta))[0])]
+
         def dibujar():
             for hijo in lista.winfo_children():
                 hijo.destroy()
-            for i, (ruta, var) in enumerate(filas):
+            filtrando = bool(busqueda_var.get().strip())
+            mostrar = visibles()
+            for fila, i in enumerate(mostrar):
+                ruta, var = filas[i]
                 datos = Modelo_Cara.datos(ruta)
                 nombre = os.path.splitext(os.path.basename(ruta))[0]
                 texto = nombre + (f"  ({datos['caras_usadas']} caras)" if "caras_usadas" in datos else "")
-                ttk.Checkbutton(lista, text=texto, variable=var, command=actualizar_orden).grid(row=i, column=0, sticky="w", pady=2)
-                if not combinar:
-                    ttk.Button(lista, text="↑", width=3, command=lambda i=i: mover(i, -1)).grid(row=i, column=1, padx=(10, 2))
-                    ttk.Button(lista, text="↓", width=3, command=lambda i=i: mover(i, 1)).grid(row=i, column=2)
-                ttk.Button(lista, text="Eliminar", width=8, command=lambda i=i: eliminar(i)).grid(row=i, column=3, padx=(10, 0))
+                ttk.Checkbutton(lista, text=texto, variable=var, command=actualizar_orden).grid(row=fila, column=0, sticky="w", pady=2)
+                # Con la lista filtrada no se ordena: ↑ ↓ moverían el modelo junto a otros que no se ven
+                if not combinar and not filtrando:
+                    ttk.Button(lista, text="↑", width=3, command=lambda i=i: mover(i, -1)).grid(row=fila, column=1, padx=(10, 2))
+                    ttk.Button(lista, text="↓", width=3, command=lambda i=i: mover(i, 1)).grid(row=fila, column=2)
+                ttk.Button(lista, text="Eliminar", width=8, command=lambda i=i: eliminar(i)).grid(row=fila, column=3, padx=(10, 0))
+                ttk.Button(lista, text="Piel", width=5, command=lambda i=i: ver_piel(i)).grid(row=fila, column=4, padx=(5, 0))
+            if not mostrar:
+                ttk.Label(lista, text=f"Ningún modelo contiene «{busqueda_var.get().strip()}»",
+                          foreground="gray").grid(row=0, column=0, sticky="w", pady=2)
+            conteo_label.config(text=f"{len(mostrar)} de {len(filas)}" if filtrando else f"{len(filas)} modelo(s)")
+            lienzo.yview_moveto(0)
             actualizar_orden()
 
+        def al_buscar_enter(_=None):
+            """Enter con un solo resultado: lo marca o desmarca"""
+            mostrar = visibles()
+            if len(mostrar) == 1:
+                var = filas[mostrar[0]][1]
+                var.set(not var.get())
+                actualizar_orden()
+
+        def al_buscar_escape(_=None):
+            """Esc borra la búsqueda; con la búsqueda vacía cierra la ventana"""
+            if busqueda_var.get():
+                busqueda_var.set("")
+            else:
+                ventana.destroy()
+            return "break"
+
+        busqueda_var.trace_add("write", lambda *_: dibujar())
+        busqueda.bind("<Return>", al_buscar_enter)
+        busqueda.bind("<Escape>", al_buscar_escape)
+
+        def ver_piel(i):
+            """Abre la imagen de piel del modelo, o deja elegir una foto para usarla como piel"""
+            ruta = filas[i][0]
+            nombre = os.path.splitext(os.path.basename(ruta))[0]
+            actual = Modelo_Cara.imagen_piel(ruta)
+            origen = Modelo_Cara.datos(ruta).get("piel", {}).get("origen")
+            if actual is not None:
+                texto = (f"Imagen de piel de «{nombre}»: {os.path.basename(actual)}"
+                         + (f"\n(salió de {origen})" if origen else "")
+                         + "\n\nSí = verla   No = cambiarla por otra foto   Cancelar = nada")
+                respuesta = messagebox.askyesnocancel("Piel del modelo", texto, parent=ventana)
+                if respuesta is None:
+                    return
+                if respuesta:
+                    os.startfile(actual)
+                    return
+            elif not messagebox.askyesno("Piel del modelo", f"«{nombre}» no tiene imagen de piel (se creó antes o "
+                                         "ninguna cara servía).\n\n¿Elegir una foto de la misma persona?", parent=ventana):
+                return
+            foto = filedialog.askopenfilename(parent=ventana, title=f"Foto para la piel de «{nombre}»",
+                                              filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.webp")])
+            if not foto:
+                return
+            extension = os.path.splitext(foto)[1].lower()
+            for vieja in Modelo_Cara.rutas_piel(ruta):
+                os.remove(vieja)
+            # copyfile deja la fecha de ahora: agregar_piel ve que cambió y la vuelve a leer
+            shutil.copyfile(foto, os.path.splitext(ruta)[0] + ".piel" + extension)
+            messagebox.showinfo("Piel del modelo", f"Listo: «{nombre}» usará esa foto para el detalle de piel.\n"
+                                "Si no es la misma persona, al procesar se avisa y no se usa.", parent=ventana)
+
         def eliminar(i):
-            """Borra el modelo de src/modelos_caras/ (.npy, .json y miniatura), después de confirmar"""
+            """Borra el modelo de src/modelos_caras/ (.npy, .json, miniatura e imagen de piel), después de confirmar"""
             ruta = filas[i][0]
             nombre = os.path.splitext(os.path.basename(ruta))[0]
             if not messagebox.askyesno("Eliminar modelo",
-                                       f"¿Eliminar el modelo «{nombre}»?\n\nSe borran su archivo .npy, sus datos (.json) "
-                                       f"y su miniatura (.jpg) de {CARPETA_MODELOS}.\nNo se puede deshacer.",
+                                       f"¿Eliminar el modelo «{nombre}»?\n\nSe borran su archivo .npy, sus datos (.json), "
+                                       f"su miniatura (.jpg) y su imagen de piel de {CARPETA_MODELOS}.\nNo se puede deshacer.",
                                        icon="warning", default="no", parent=ventana):
                 return
             try:
@@ -1695,13 +1790,17 @@ class FaceSwapApp:
                                  f"{m['similitud_con_resultado']:.2f}" for m in datos["combinado_de"])
             if datos["similitud_promedio"] >= 0.9:
                 mensaje += "\n\nLos modelos eran casi iguales: combinarlos aportó poco."
-            messagebox.showinfo("Combinar modelos", mensaje + f"\n\nGuardado en {salida}")
+            messagebox.showinfo("Combinar modelos", mensaje + f"\n\nGuardado en {salida}" + self._texto_piel(datos))
 
         dibujar()
+        busqueda.focus_set()  # se puede escribir apenas se abre la ventana
         botones = ttk.Frame(ventana)
         botones.pack(pady=10)
         ttk.Button(botones, text="Aceptar", command=aceptar).pack(side=tk.LEFT, padx=5)
         ttk.Button(botones, text="Cancelar", command=ventana.destroy).pack(side=tk.LEFT, padx=5)
+        # Al filtrar la ventana no se angosta (sin las flechas la lista es más chica y los botones saltarían)
+        ventana.update_idletasks()
+        ventana.minsize(ventana.winfo_reqwidth(), 0)
 
     def validar_indices_fuente(self, caras_src):
         """Avisa antes de procesar si algún índice fuente no existe"""
@@ -1715,14 +1814,27 @@ class FaceSwapApp:
             raise Exception(f"El índice fuente {malos[0]} no existe: hay {len(caras_src)} {tipo} "
                             f"(índices de 0 a {len(caras_src) - 1})")
 
+    def _piel_modelos(self, caras):
+        """Piel de cada modelo desde su imagen de piel (--detalle-piel). Se vuelve a leer solo si la imagen cambió:
+        si se reemplaza <modelo>.piel.png con la app abierta, el siguiente proceso ya usa la nueva.
+        Con «Forma de la cara», a los modelos creados antes de guardar la forma se les mide en esa imagen"""
+        if not self.modelos_src:
+            return
+        for cara in caras:
+            Modelo_Cara.agregar_piel(cara, self.swapper)
+            if self._forma_activa and cara.get("forma") is None:
+                Modelo_Cara.agregar_forma(cara, self.swapper)
+
     def obtener_caras_src(self):
         """Caras fuente para el procesamiento: de los modelos .npy o detectadas una vez en la foto fuente"""
         ruta, caras = self._caras_src_cache
         if ruta == self.source_path and caras is not None:
+            self._piel_modelos(caras)
             return caras
 
         if self.modelos_src:
             caras = [Modelo_Cara.cargar(r) for r in self.modelos_src]
+            self._piel_modelos(caras)
         else:
             source_img = leer(self.source_path)
             if source_img is None:
@@ -2017,7 +2129,17 @@ class FaceSwapApp:
             mensaje += f"\n{datos['caras_descartadas']} cara(s) descartada(s) por ser de otra persona o de baja calidad."
         if datos["caras_usadas"] > 1:
             mensaje += f"\nSimilitud promedio entre caras: {datos['similitud_promedio']:.2f}"
-        messagebox.showinfo("Modelo de cara", mensaje + f"\n\nGuardado en {salida}")
+        messagebox.showinfo("Modelo de cara", mensaje + f"\n\nGuardado en {salida}" + self._texto_piel(datos))
+
+    @staticmethod
+    def _texto_piel(datos):
+        """De qué cara salió la imagen de piel del modelo (para --detalle-piel) y cómo cambiarla"""
+        piel = datos.get("piel")
+        if piel is None:
+            return "\n\nPiel: no se guardó (ninguna cara servía); el detalle de piel no funcionará con este modelo."
+        return (f"\n\nPiel (detalle de piel): de {piel['origen']} → {piel['imagen']}.\n"
+                "Para usar otra, reemplaza esa imagen por otra foto de la misma persona, de frente y nítida "
+                "(o usa el botón «Piel» en «Elegir modelos»).")
         
     def set_target(self, path):
         if os.path.isdir(path):
@@ -2116,6 +2238,7 @@ class FaceSwapApp:
             mejillas=self.var_mejillas.get(),
             color_ojos=self.color_ojos_var.get(),
             detalle_piel=self.detalle_piel_var.get(),
+            forma=self.forma_cara_var.get(),
             mascara=self.mascara_var.get(),
             color=self.color_var.get(),
             maquillaje=self.maquillaje_var.get(),
@@ -2136,7 +2259,7 @@ class FaceSwapApp:
         """Cada cambio en la configuracion actualiza el preview abierto"""
         for var in (self.src_indices_var, self.dst_indices_var, self.asignacion_var, self.genero_var,
                     self.mascara_var, self.color_var, self.var_ojos, self.var_boca, self.var_nariz, self.var_frente,
-                    self.var_mejillas, self.color_ojos_var, self.detalle_piel_var,
+                    self.var_mejillas, self.color_ojos_var, self.detalle_piel_var, self.forma_cara_var,
                     self.maquillaje_var, self.var_oclucion, self.oclusion_modo_var, self.var_mejorar,
                     self.caras_inclinadas_var,
                     self.fuerza_gpen_var,
@@ -2418,6 +2541,7 @@ class FaceSwapApp:
             **({"mejillas": True} if self.var_mejillas.get() else {}),
             **({"color_ojos": self.color_ojos_var.get()} if self.color_ojos_var.get() != "ninguno" else {}),
             **({"detalle_piel": round(self.detalle_piel_var.get(), 2)} if self.detalle_piel_var.get() > 0.004 else {}),
+            **({"forma_cara": round(self.forma_cara_var.get(), 2)} if self.forma_cara_var.get() > 0.004 else {}),
             # 2: caras inclinadas sin saltos (mezcla gradual entre 10 y 20 grados); 3: caras volteadas;
             # 4: caras de perfil (tono de la mejilla y mascara corrida hacia la oreja)
             "deteccion": 4,
